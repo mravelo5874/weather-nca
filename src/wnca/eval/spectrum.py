@@ -1,0 +1,1 @@
+"""Band-energy spectrum evaluation."""

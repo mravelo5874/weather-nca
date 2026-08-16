@@ -1,0 +1,2 @@
+# Shared defaults, layered by every phase config below.
+# TODO: populate once src/wnca/config.py defines the schema (dataclasses + validation).

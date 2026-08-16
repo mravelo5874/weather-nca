@@ -1,0 +1,1 @@
+"""Timestamped, asserted, resumable checkpointing."""

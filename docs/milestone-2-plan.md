@@ -2,7 +2,7 @@
 
 **Goal:** Determine whether a strictly local update rule loses accuracy relative to a non-local model of equal budget, and whether it can be made to produce a calibrated, sharp ensemble.
 
-Milestone 1 answered *can a strictly local rule advect?* — yes, on real ERA5: 24 h z500 RMSE 344.7 vs persistence 593.9, stable to 7 days, spectrum preserved at 24 h, on ~100k parameters and two years of data. M2 asks the follow-up that actually decides whether to keep going.
+Milestone 1 answered *can a strictly local rule advect?* — yes, on real ERA5: 24 h z500 RMSE 344.7 vs persistence 593.9, stable to 7 days, spectrum preserved at 24 h, on 27.5k parameters and two years of data. M2 asks the follow-up that actually decides whether to keep going.
 
 ---
 
@@ -16,7 +16,7 @@ Milestone 1 answered *can a strictly local rule advect?* — yes, on real ERA5: 
 | 4 | **Spectral term moved from Deferred into the M2 loss** | FCN3: pointwise CRPS produces well-scored ensembles whose members are spectrally wrong. |
 | 5 | **Fair CRPS estimator mandated** | At M = 4–8 the naive estimator is biased toward under-dispersion by a large factor. |
 | 6 | **Step 2 split into 2a / 2b** | v1 changed variables and data volume simultaneously and claimed to separate them. |
-| 7 | **Parameter count freed** | ~100k was an M1 constraint, not a design principle. 20+ variables and 39 years need more capacity. |
+| 7 | **Parameter count freed** | M1's 27.5k (not ~100k — see Capacity) was neither a VRAM constraint nor a design principle. 20+ variables and 39 years need more capacity. |
 | 8 | **Exit criterion is a slope, not a number** | "Under 2× frontier" may be unreachable on spot instances regardless of whether the architecture is sound. |
 | 9 | **True pushforward added alongside existing training noise** | M1's `noise_std = 0.05` is Sanchez-Gonzalez-style input noise, which is not the same mechanism as Brandstetter's pushforward. |
 | 10 | **Mesh resolution labels corrected** | See below — the "1°" mesh is nearer 2°, and this materially changes how the frontier gap should be read. |
@@ -38,7 +38,7 @@ Consequence: part of the 6× frontier gap is a resolution mismatch roughly 8× l
 | Output | Deterministic | Probabilistic ensemble | Calibrated extremes |
 | Data | 2 years | 2 yr → 1979–2017 (laddered) | + operational analyses |
 | Loss | Area-weighted MSE | Fair CRPS + spectral band CRPS | + energy/conservation terms |
-| Params | ~100k | 1–5M | — |
+| Params | 27.5k | 1–5M | — |
 | Baselines | Persistence | **Same-budget GNN control**, climatology, WB2 frontier | GenCast parity |
 
 Resolution is deliberately frozen for the whole milestone. Every result in M2 is comparable to every other result in M2.
@@ -91,7 +91,11 @@ Levels chosen to bracket 500 hPa (geostrophic coupling to the wind is the main e
 
 ### Capacity
 
-M1's ~100k parameters was a 6 GB-VRAM constraint, not a design principle. With 28 physical + 32 hidden channels the perception output alone is 240-dimensional. Target **1–5M parameters** (`hidden_dim = 512`, `n_layers = 4`) — still an order of magnitude under DLWP-HPX's 9.8M, which is the nearest published small-model precedent. Sweep capacity once, early, at fixed data.
+M1's parameter count was **27,536**, not ~100k (corrected 2026-08-16 against the notebook's own output; see `milestone-1-findings.md`). And it was **not** a 6 GB-VRAM constraint: measured, the exact M1 configuration peaks at **0.37 GB** — 6% of the card. Both halves of the original justification were wrong.
+
+The real reason to raise capacity is the one that survives: with 28 physical + 32 hidden channels the perception output alone is 240-dimensional, so the input layer is ~8× wider than M1's before any depth is added. Capacity should scale with the state, not because VRAM was previously binding.
+
+Target **1–5M parameters** (`hidden_dim = 512`, `n_layers = 4`) — still an order of magnitude under DLWP-HPX's 9.8M, the nearest published small-model precedent. But note this is a **36–180× jump from 27.5k**, not the ~10–50× the old figure implied, and the measured profile says runtime is ~80% update-MLP scaling with `hidden_dim²`. Sweep capacity once, early, at fixed data — and treat the sweep as a compute-budget decision, not only an accuracy one. `hidden_dim = 256` (318k params) is a legitimate landing spot if the accuracy gain from 512 is small.
 
 ### The control model
 
@@ -175,7 +179,30 @@ Phases 2a and 2b are cheap and answer a question v1 claimed to answer but could 
 
 **Spot-instance resumption.** Checkpoint every N steps *and* on SIGTERM. Store optimizer state, RNG state, epoch, and step. The data cache must be rebuildable and resumable independently of training state.
 
-**Compute cost.** The dominant term is `M × n_substeps` network evaluations per forecast step — at M = 4 and 20 sub-steps that is 80 MLP passes over ~10k nodes per sample, before backward. Memory is more forgiving than it looks: CRPS only touches the *terminal* predicted fields, so with checkpointing on the sub-step loop the live activation cost is roughly `M × B × N × C_phys`. Benchmark this on day one with `scripts/benchmark_step.py` and put the measured number in the plan rather than trusting this paragraph.
+**Compute cost — measured, 2026-08-16.** The dominant term is `M × n_substeps` network evaluations per forecast step — at M = 4 and 20 sub-steps that is 80 MLP passes over ~10k nodes per sample, before backward.
+
+Measured with `scripts/benchmark_step.py` on the local **GTX 1660 Ti (6 GB, no tensor cores)**, fp32, gradient checkpointing on, `n_sub = 5` (10,242 nodes), 28 physical + 32 hidden channels, one forecast step forward **and** backward:
+
+| hidden_dim | B | M | ms/step | peak GB | params |
+|---|---|---|---|---|---|
+| 512 | 1 | 1 | 1,195 | 0.29 | 1.03 M |
+| 512 | 2 | 1 | 2,213 | 0.54 | 1.03 M |
+| 512 | 1 | 4 | 4,800 | 1.05 | 1.03 M |
+| 512 | 2 | 4 | 7,350 | 2.08 | 1.03 M |
+| 256 | 2 | 4 | 3,864 | 1.33 | 318 K |
+| 256 | 4 | 4 | 6,619 | 2.63 | 318 K |
+| 128 | 8 | 4 | 10,632 | 3.87 | 110 K |
+
+Two corrections to the paragraph this replaces:
+
+1. **The memory estimate was right, and memory is not the constraint.** Peak stays under 4 GB in every configuration tried; cost is linear in `B × M` exactly as predicted. 6 GB is not binding.
+2. **Time is the constraint, and it is worse than implied.** Cost is also linear in `B × M`, which means there is no batching efficiency to recover — at `hidden_dim = 512, B = 2, M = 4` a single training step costs 7.35 s, i.e. **3.7 s per sample**. One epoch over the full 39-year split (56,979 samples) is therefore ~58 h on this card, and phase 2c at 20 epochs is ~48 days. Locally infeasible by two orders of magnitude, exactly as the plan assumed — but the number is now measured rather than assumed.
+
+Profiling the step (`hidden_dim = 512`, `B × M = 8` rows): the update MLP is **84 ms** and mesh perception is **20 ms** per sub-step, so ~80% of the cost is the MLP and it scales with `hidden_dim²`. The capacity sweep in 2c is therefore also the compute-budget decision, not just an accuracy one.
+
+Implication for the cloud budget: an A100 runs fp32 roughly 15–25× this card, and more with TF32/AMP (both wired up; `train.amp` is off by default because Turing has no tensor cores and it is a no-op locally). That puts phase 2c near 2.5–4 h/epoch and ~2–3 days per full phase, so 2c + 2d + 3a + 3b is on the order of **10 GPU-days**. Re-run the benchmark on the actual cloud instance before committing to that.
+
+**Cache sizing — measured.** 39 years, 6-hourly, 10,242 nodes, 28 channels, float32 is **65 GB** on disk (the 2-year phase-2b split is 3.3 GB). `data.cache_dtype: float16` halves it. This is memmapped and built resumably in 256-timestep chunks, so a preempted build restarts at a chunk boundary.
 
 ---
 

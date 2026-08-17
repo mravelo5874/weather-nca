@@ -1,2 +1,74 @@
-# Shared defaults, layered by every phase config below.
-# TODO: populate once src/wnca/config.py defines the schema (dataclasses + validation).
+# Shared defaults. Every phase config extends this; only the deltas live in the phase file.
+# A fully-resolved copy is written next to each run's checkpoints -- reproduce from that.
+phase: base
+
+mesh:
+  n_sub: 5                       # 10242 nodes, ~223 km spacing. Frozen for all of M2.
+
+variables:
+  atmospheric: [geopotential, u_component_of_wind, v_component_of_wind, temperature, specific_humidity]
+  levels: [850, 700, 500, 300, 250]
+  surface: [10m_u_component_of_wind, 10m_v_component_of_wind, 2m_temperature]
+  log_transform: [specific_humidity]
+
+state:
+  c_hidden: 32
+  c_static: 4
+  second_order: true
+
+model:
+  kind: nca
+  hidden_dim: 512
+  n_layers: 4
+  n_substeps: 20                 # THE CFL BUDGET. Re-measure per variable at 2b.
+  dt: 0.05
+  noise_dim: 16
+  stochastic: false
+  reseed_hidden: true
+  grad_ckpt: true
+
+data:
+  source: era5
+  wb2_res: "240x121"
+  train_years: "1979-2017"
+  val_years: [2018]
+  test_years: [2020]             # matches the WB2 probabilistic leaderboard
+  cache_dir: ./wnca_cache
+  cache_dtype: float32
+
+loss:
+  w_field: 1.0
+  w_spec: 0.0
+  w_over: 1.0e-2
+  crps_alpha: 1.0
+  n_bands: 5
+  cheby_order: 24
+
+ensemble:
+  m_train: 4
+  m_val: 16
+  m_test: 50
+
+train:
+  epochs: 8
+  batch_size: 8
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  warmup_steps: 500
+  grad_clip: 1.0
+  rollout_epochs: 0              # disabled and gated; see CLAUDE.md
+  noise_std: 0.05
+  pushforward: false
+  ckpt_windows: 8
+  seed: 0
+
+eval:
+  max_windows: 60                # 15 days
+  n_starts: 32
+  lead_hours: [6, 12, 24, 48, 72, 120, 168, 240, 360]
+  wb2_grid: "1.5"
+
+tracking:
+  wandb: false
+  project: weather-nca
+  out_dir: ./runs

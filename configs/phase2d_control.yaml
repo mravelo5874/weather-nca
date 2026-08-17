@@ -1,2 +1,17 @@
-# Phase 2d — control GNN, matched budget. Isolates: locality.
-# Gate: control trained and scored.
+# Phase 2d -- the same-budget control GNN. Isolates: LOCALITY. This is the thesis under test.
+# GATE: control trained and scored on the same data, optimizer and wall-clock budget.
+#
+# Match the parameter count to the chosen 2c model before running -- check with
+#   wnca benchmark -c configs/phase2d_control.yaml
+# and tune gnn_hidden / gnn_hops until params and ms/step are within ~10% of the NCA's.
+# Roughly 25% of the milestone's compute, and the highest-value spend in it: without this the
+# headline result is uninterpretable.
+phase: phase2d_control
+
+model:
+  kind: control_gnn
+  gnn_hops: 4
+  gnn_hidden: 256
+
+train:
+  epochs: 20

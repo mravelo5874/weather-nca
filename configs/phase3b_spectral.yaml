@@ -1,2 +1,14 @@
-# Phase 3b — add spectral band term. Isolates: whether it's needed.
-# Gate: ablation documented either way.
+# Phase 3b -- add the spectral band term. Isolates: whether it is needed.
+# GATE: ablation documented either way.
+#
+# FCN3 found pointwise CRPS alone yields well-scored ensembles whose members are spectrally
+# wrong. Whether that holds FOR AN NCA is genuinely unknown -- the local-rule inductive bias
+# may already preserve the spectrum, as M1's 100.9% retained power at 24 h weakly suggests.
+# Run it, compare member band energies against 3a, and write down the answer either way.
+phase: phase3b_spectral
+extends: phase3a_crps.yaml
+
+loss:
+  w_spec: 0.1
+  n_bands: 5
+  cheby_order: 24

@@ -441,7 +441,7 @@ ENS's 22.4). At 344.7, this model is a factor of ~6 off.
 That gap is expected and almost entirely attributable to things Milestone 2 addresses: two
 training years against the frontier's ~forty, one variable against a coupled state, 1°
 against 0.25°, deterministic MSE against CRPS. None of it is evidence the architecture is
-wrong. A 100k-parameter local rule producing stable, spectrum-preserving 48 h z500 forecasts
+wrong. A 28k-parameter local rule producing stable, spectrum-preserving 48 h z500 forecasts
 on real data is a legitimate proof of concept that the iterated-local-PDE inductive bias does
 real work. Whether it closes the 6× gap or plateaus at 2–3× is genuinely unknown and is the
 question Milestone 2 exists to answer.
@@ -482,3 +482,8 @@ every run reads as distance-to-frontier rather than distance-to-a-weak-baseline.
 - The stored `.ipynb` had `source` arrays whose lines were not newline-terminated, so the
   cells collapse to a single line when opened. Fixed in place; worth checking if the file
   passes through any tooling again.
+
+> **Correction (2026-08-16, M2 port).** This document originally said "100k-parameter".
+> The M1 configuration (`c_hidden=15, hidden_dim=128, n_layers=2`) gives **27,536** parameters,
+> confirmed against the notebook's own `parameters: 27,536` output. The figure has been corrected
+> above and in `milestone-2-plan.md`, where it was being used as a premise.

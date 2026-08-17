@@ -55,13 +55,38 @@ for them — don't, unless a direct measurement (see Methodology) justifies it.
 ## Commands
 
 ```bash
-make test                    # unit tests, must stay under 60s
-make smoke                   # full train -> eval cycle, n_sub=3, one month of data, < 2 min
-make train CONFIG=configs/phaseX.yaml
-make eval CONFIG=configs/phaseX.yaml
+make test                    # unit tests, must stay under 60s (currently ~13s, 76 tests)
+make smoke                   # full train -> eval cycle, n_sub=3, synthetic data, no network
+make cache     CONFIG=configs/phaseX.yaml   # resumable; safe to interrupt and re-run
+make benchmark CONFIG=configs/phaseX.yaml   # run before committing to a phase's compute
+make train     CONFIG=configs/phaseX.yaml
+make eval      CONFIG=configs/phaseX.yaml
 ```
 
+Equivalent CLI: `wnca {mesh,cache,train,eval,benchmark} -c <config> [--smoke] [--set k.v=x]`.
+
 Run `make smoke` before any phase goes to cloud.
+
+## Measured facts (2026-08-16, local GTX 1660 Ti 6 GB)
+
+Re-measure these on the actual cloud instance before budgeting; do not treat them as portable.
+
+- **Memory is not the constraint.** Peak stays under 4 GB in every M2 configuration tried.
+- **Time is.** ~80% of a sub-step is the update MLP and it scales with `hidden_dim²`; mesh
+  perception is ~20%. Cost is linear in `B × M`, so there is no batching efficiency to recover.
+  The 2c capacity sweep is therefore a compute-budget decision as much as an accuracy one.
+- Full 39-year, 28-channel float32 cache is **65 GB**; the 2-year phase-2b split is 3.3 GB.
+- The WB2 `240x121` store's dims are `(time, level, longitude, latitude)` — **longitude before
+  latitude**. This is the transpose that voided an M1 run. `data/era5.py` transposes explicitly;
+  never remove it, and never assume a store's axis order.
+
+## Things that were tried and did not work
+
+Recorded so they are not re-attempted:
+
+- **Fusing the three perception operators into one [3N, N] sparse matmul** to save kernel
+  launches. Measured *slower* (33 ms vs 20 ms): permuting the 3×-wider result costs more memory
+  traffic than the launches save.
 
 ## Decisions
 

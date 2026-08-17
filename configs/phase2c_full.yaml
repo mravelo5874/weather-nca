@@ -1,2 +1,12 @@
-# Phase 2c — multi-variable, full data, capacity sweep. Isolates: combined + capacity.
-# Gate: best deterministic checkpoint.
+# Phase 2c -- multi-variable, full data, capacity sweep. Isolates: combined effect + capacity.
+# GATE: best deterministic checkpoint. This is what phase 3a warm-starts from.
+#
+# Sweep capacity once, early, at fixed data:
+#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=256 model.n_layers=3
+#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=512 model.n_layers=4
+#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=768 model.n_layers=4
+# Target 1-5M params, an order of magnitude under DLWP-HPX's 9.8M.
+phase: phase2c_full
+
+train:
+  epochs: 20

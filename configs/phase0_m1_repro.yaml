@@ -1,2 +1,46 @@
-# Phase 0 — port M1 into the repo, reproduce 344.7 24h z500 RMSE.
-# Gate: 24h z500 RMSE within 2% of M1.
+# Phase 0 -- port M1 into the repo and reproduce its number.
+# GATE: 24 h z500 RMSE within 2% of 344.7 (i.e. 338-352 m^2/s^2).
+#
+# This is the migration's acceptance test. Do not start phase 2a until it passes.
+# Everything here is M1's configuration exactly: one variable, ~100k params, 2 training years.
+phase: phase0_m1_repro
+
+variables:
+  atmospheric: [geopotential]
+  levels: [500]
+  surface: []
+  log_transform: []
+
+state:
+  c_hidden: 15                   # M1 value
+  c_static: 4
+  second_order: true
+
+model:
+  hidden_dim: 128                # M1 value -> ~100k params
+  n_layers: 2
+  n_substeps: 20
+  dt: 0.05
+  stochastic: false
+
+data:
+  train_years: [2015, 2016]      # M1 used two years
+  val_years: [2017]
+  test_years: [2018]
+
+train:
+  epochs: 8
+  batch_size: 8
+  lr: 1.0e-3
+  ckpt_windows: 8
+  noise_std: 0.05
+  # M1 used no warmup: plain cosine decay from 1e-3 over 8 epochs. base.yaml's 500-step warmup
+  # would spend 1.4 of the 8 epochs ramping (only ~365 batches/epoch here), which is a real
+  # schedule difference and would make a missed target ambiguous between a port bug and a
+  # different schedule. Reproduction fidelity beats the better default.
+  warmup_steps: 0
+
+eval:
+  max_windows: 28
+  n_starts: 32
+  lead_hours: [6, 12, 24, 48, 72, 120, 168]

@@ -1,0 +1,54 @@
+"""Shared fixtures. Everything here runs on a tiny mesh so `make test` stays under 60s."""
+import numpy as np
+import pytest
+
+from wnca.config import load_config
+from wnca.mesh.icosphere import edges_from_faces, icosphere
+from wnca.mesh.operators import build_perception_coeffs
+
+
+@pytest.fixture(scope="session")
+def small_mesh():
+    """n_sub=3 (642 nodes): big enough for the operators to be meaningful, small enough to be fast."""
+    v, faces = icosphere(3)
+    edges = edges_from_faces(faces)
+    gx, gy, lap, area = build_perception_coeffs(v, faces, edges)
+    return dict(
+        v=v, faces=faces, edges=edges, gx=gx, gy=gy, lap=lap, area=area,
+        lat=np.degrees(np.arcsin(np.clip(v[:, 2], -1, 1))),
+        lon=np.degrees(np.arctan2(v[:, 1], v[:, 0])),
+    )
+
+
+@pytest.fixture(scope="session")
+def tiny_cfg(tmp_path_factory):
+    """Synthetic-data config on the small mesh: no network, no ERA5, deterministic."""
+    return load_config(
+        None,
+        overrides={
+            "phase": "test",
+            "mesh": {"n_sub": 3},
+            "variables": {
+                "atmospheric": ["geopotential", "temperature"],
+                "levels": [500, 850],
+                "surface": ["2m_temperature"],
+                "log_transform": [],
+            },
+            "state": {"c_hidden": 4},
+            "model": {"hidden_dim": 32, "n_layers": 2, "n_substeps": 3, "noise_dim": 8},
+            "data": {
+                "source": "synthetic",
+                "cache_dir": str(tmp_path_factory.mktemp("cache")),
+                "max_steps_per_split": 40,
+                "train_years": [2015], "val_years": [2016], "test_years": [2017],
+            },
+            "train": {"epochs": 1, "batch_size": 2, "ckpt_windows": 2, "warmup_steps": 2},
+            "ensemble": {"m_train": 3, "m_val": 3, "m_test": 3},
+        },
+    )
+
+
+@pytest.fixture(scope="session")
+def tiny_cache(tiny_cfg, small_mesh):
+    from wnca.data.cache import build_cache
+    return build_cache(tiny_cfg, small_mesh, verbose=False)

@@ -1,2 +1,30 @@
-# Phase 3a — probabilistic: FiLM noise + fair CRPS, warm-started from 2c. Isolates: loss + noise.
-# Gate: spread-skill > 0.3 by epoch 3.
+# Phase 3a -- probabilistic: FiLM noise + fair CRPS. Isolates: loss + noise.
+# GATE: spread-skill > 0.3 by epoch 3.
+#
+# Warm-start from the best 2c checkpoint. Because the FiLM projection is zero-initialized the
+# model begins numerically IDENTICAL to that checkpoint and the noise pathway grows from there.
+# Set train.warm_start to the 2c checkpoint path before running.
+#
+# Anti-collapse instrumentation runs from step zero -- spread, zero-noise ablation, and FiLM
+# gradient norm are the gate, not afterthoughts. If spread < 0.05 x RMSE at epoch 3 the loop
+# stops on its own: fix the conditioning rather than training through it.
+phase: phase3a_crps
+
+model:
+  stochastic: true
+  noise_dim: 16
+
+loss:
+  w_field: 1.0
+  w_spec: 0.0                    # 3b turns this on
+  crps_alpha: 1.0                # fully fair; drop toward 0.95 only for gradient stability
+
+ensemble:
+  m_train: 4
+  m_val: 16
+  m_test: 50
+
+train:
+  epochs: 15
+  lr: 1.0e-4                     # dropped an order of magnitude from the deterministic phases
+  warm_start: null               # <- set to the phase 2c checkpoint

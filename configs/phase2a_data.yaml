@@ -1,2 +1,24 @@
-# Phase 2a — M1 config, single variable, full 39yr data. Isolates: data volume.
-# Gate: documented RMSE vs the 2-year number.
+# Phase 2a -- M1 config, single variable, FULL 39 years. Isolates: data volume.
+# GATE: documented RMSE vs the 2-year number (344.7 at 24 h).
+#
+# Lowest-risk run in the milestone: it reuses a model that already works and changes exactly
+# one thing. v1 of the plan changed variables and data volume at once and claimed to have
+# separated them; this is the fix.
+phase: phase2a_data
+extends: phase0_m1_repro.yaml
+
+data:
+  train_years: "1979-2017"
+  val_years: [2018]
+  test_years: [2020]
+
+train:
+  # 39 years is 7,117 batches/epoch against phase 0's 365 -- 19.5x more data per epoch. At 12
+  # epochs this would be 85k gradient steps against phase 0's 2.9k (29x), which confounds
+  # "more data" with "more training" and is exactly what this phase exists to separate.
+  # 3 epochs = 21k steps (7.3x) sees every sample three times while keeping the training
+  # budget within one order of magnitude of the baseline. Watch the selection curve: if it is
+  # still descending steeply at epoch 3, extend and say so in the write-up.
+  # Everything else -- including warmup_steps: 0 -- is inherited from phase 0 unchanged, so
+  # data volume is the only variable that moves.
+  epochs: 3

@@ -1,2 +1,14 @@
-# Phase 2b — multi-variable, 2 years. Isolates: coupling.
-# Gate: documented RMSE vs 2a.
+# Phase 2b -- multi-variable, 2 years. Isolates: coupling.
+# GATE: documented RMSE vs 2a.
+#
+# Also the phase where `perturbation_growth` must be re-run PER VARIABLE: n_substeps = 20 was
+# measured on one band-limited field, and coupled dynamics carry faster adjustment processes.
+phase: phase2b_multivar
+
+data:
+  train_years: [2015, 2016]
+  val_years: [2017]
+  test_years: [2018]
+
+train:
+  epochs: 12

@@ -74,7 +74,7 @@ def cmd_train(args) -> int:
     from .train.phases import run_phase
 
     cfg = load_config(args.config, _parse_sets(args.sets), smoke=args.smoke)
-    run_phase(cfg, device=args.device, out_dir=args.out)
+    run_phase(cfg, device=args.device, out_dir=args.out, resume=args.resume)
     return 0
 
 
@@ -198,6 +198,10 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--force", action="store_true", help="rebuild from scratch")
         if name in ("train", "eval", "benchmark"):
             p.add_argument("--out", default=None, help="output directory")
+        if name == "train":
+            p.add_argument("--resume", default=None, metavar="PATH|auto",
+                           help="resume a crashed run from a checkpoint, restoring "
+                                "optimizer state, epoch and LR-schedule position")
         if name == "eval":
             p.add_argument("--checkpoint", default=None)
             p.add_argument("--split", default="test", choices=("train", "val", "test"))

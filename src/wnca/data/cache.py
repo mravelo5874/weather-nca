@@ -196,26 +196,57 @@ def build_cache(cfg: Config, mesh: dict[str, np.ndarray], force: bool = False,
             print(f"  {split}: {T}/{T} timesteps  ")
 
     # ---- normalize in place, stats from train only ----
-    train = np.memmap(root / "train.dat", dtype=dtype, mode="r", shape=tuple(man["shapes"]["train"]))
-    stat_steps = min(len(train), 2000)  # stats over a strided sample; full-array is I/O bound
-    sample = np.asarray(train[:: max(1, len(train) // stat_steps)], dtype=np.float32)
-    norm = fit_normalizer(sample, cfg)
-    norm.save(root / "normalizer.json")
-    del train, sample
+    #
+    # This pass rewrites every byte of the cache and is the most dangerous part of the build:
+    # normalization is not idempotent, so applying it twice to the same chunk silently corrupts
+    # the data with no error and no obvious symptom. At 65 GB (phase 2c) the pass is long enough
+    # that a spot preemption landing inside it is a real possibility, so progress is tracked per
+    # split at chunk granularity, exactly like the streaming pass above.
+    man.setdefault("norm_progress", {s: 0 for s in SPLITS})
+
+    # The normalizer must be fitted ONCE, on raw data. Refitting on resume would read a
+    # partially normalized train split and produce meaningless statistics -- which would then
+    # be applied to the remaining chunks, leaving the cache internally inconsistent.
+    norm_path = root / "normalizer.json"
+    if norm_path.exists() and any(man["norm_progress"].values()):
+        norm = Normalizer.load(norm_path)
+        norm.assert_matches(cfg)
+        if verbose:
+            print("  resuming normalization with the previously fitted statistics")
+    else:
+        train = np.memmap(root / "train.dat", dtype=dtype, mode="r",
+                          shape=tuple(man["shapes"]["train"]))
+        stat_steps = min(len(train), 2000)  # strided sample; the full array is I/O bound
+        sample = np.asarray(train[:: max(1, len(train) // stat_steps)], dtype=np.float32)
+        norm = fit_normalizer(sample, cfg)
+        norm.save(norm_path)
+        del train, sample
 
     for split in SPLITS:
         shape = tuple(man["shapes"][split])
+        done = man["norm_progress"][split]
+        if done >= shape[0]:
+            continue
         arr = np.memmap(root / f"{split}.dat", dtype=dtype, mode="r+", shape=shape)
-        for t0 in range(0, shape[0], CHUNK_STEPS):
+        for t0 in range(done, shape[0], CHUNK_STEPS):
             t1 = min(t0 + CHUNK_STEPS, shape[0])
             arr[t0:t1] = norm.encode(np.asarray(arr[t0:t1], dtype=np.float32)).astype(dtype)
-        arr.flush()
-        if split == "train":
-            acc = np.zeros((shape[1], shape[2]), dtype=np.float64)
-            for t0 in range(0, shape[0], CHUNK_STEPS):
-                t1 = min(t0 + CHUNK_STEPS, shape[0])
-                acc += np.asarray(arr[t0:t1], dtype=np.float64).sum(axis=0)
-            np.save(root / "climatology.npy", (acc / shape[0]).astype(np.float32))
+            arr.flush()
+            man["norm_progress"][split] = t1
+            _write_manifest(root, man)
+        del arr
+        if verbose:
+            print(f"  normalized {split}: {shape[0]}/{shape[0]}")
+
+    # Climatology comes from the TRAIN split only, after it is normalized.
+    if not (root / "climatology.npy").exists():
+        shape = tuple(man["shapes"]["train"])
+        arr = np.memmap(root / "train.dat", dtype=dtype, mode="r", shape=shape)
+        acc = np.zeros((shape[1], shape[2]), dtype=np.float64)
+        for t0 in range(0, shape[0], CHUNK_STEPS):
+            t1 = min(t0 + CHUNK_STEPS, shape[0])
+            acc += np.asarray(arr[t0:t1], dtype=np.float64).sum(axis=0)
+        np.save(root / "climatology.npy", (acc / shape[0]).astype(np.float32))
         del arr
 
     man["normalized"] = True

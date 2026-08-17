@@ -11,6 +11,7 @@ from the identity map. Plus the other three checkpoint incidents: architecture d
 import dataclasses
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -152,3 +153,78 @@ def test_finiteness_guard():
     assert assert_finite(0.5, "x")
     assert not assert_finite(float("nan"), "x")
     assert not assert_finite(float("inf"), "x")
+
+
+# --- resume after a crash --------------------------------------------------------------
+
+def test_resume_restores_step_epoch_and_best(tiny_cfg, small_mesh, tmp_path):
+    """Restoring `step` matters as much as restoring weights.
+
+    The LR schedule is a function of the step counter, so a resume that forgot it would
+    silently restart the cosine decay at full learning rate and undo the run's convergence.
+    """
+    from wnca.train.loop import Trainer
+    model, opt = _trained_one_step(tiny_cfg, small_mesh)
+    path = save_checkpoint(tmp_path / "best_x.pt", model, tiny_cfg, opt,
+                           epoch=3, step=1234, metric=0.042)
+
+    fresh = build_model(tiny_cfg, small_mesh)
+    fresh_opt = torch.optim.AdamW(fresh.parameters(), lr=tiny_cfg.train.lr)
+    blob = load_checkpoint(path, fresh, tiny_cfg, fresh_opt)
+
+    assert blob["epoch"] == 3 and blob["step"] == 1234 and blob["metric"] == 0.042
+
+    # Losing `step` would restart the cosine decay. Check the schedule actually depends on it:
+    # past warmup it must decay monotonically, so a resumed step sits below an earlier one.
+    tr = Trainer(tiny_cfg, fresh, small_mesh, _StubCache(small_mesh, tiny_cfg), device="cpu")
+    w = tiny_cfg.train.warmup_steps
+    assert tr._lr_at(4000, 5000) < tr._lr_at(1234, 5000) < tr._lr_at(w, 5000)
+
+
+class _StubCache:
+    """Minimal stand-in so Trainer can be constructed without building a real cache."""
+
+    def __init__(self, mesh, cfg):
+        self.static = np.zeros((len(mesh["v"]), cfg.state.c_static), dtype=np.float32)
+
+
+def test_resume_auto_picks_the_newest_checkpoint(tiny_cfg, small_mesh, tmp_path):
+    from wnca.train.phases import resolve_resume
+    model, _ = _trained_one_step(tiny_cfg, small_mesh)
+    save_checkpoint(tmp_path / "best_old.pt", model, tiny_cfg)
+    time.sleep(0.05)
+    newest = save_checkpoint(tmp_path / "best_new.pt", model, tiny_cfg)
+    assert resolve_resume("auto", tmp_path, tiny_cfg) == newest
+
+
+def test_resume_explicit_path_is_honoured(tiny_cfg, small_mesh, tmp_path):
+    from wnca.train.phases import resolve_resume
+    model, _ = _trained_one_step(tiny_cfg, small_mesh)
+    p = save_checkpoint(tmp_path / "specific.pt", model, tiny_cfg)
+    assert resolve_resume(str(p), tmp_path, tiny_cfg) == p
+
+
+def test_resume_missing_path_raises(tiny_cfg, tmp_path):
+    from wnca.train.phases import resolve_resume
+    with pytest.raises(FileNotFoundError, match="not found"):
+        resolve_resume(str(tmp_path / "nope.pt"), tmp_path, tiny_cfg)
+
+
+def test_resume_auto_with_no_checkpoints_raises(tiny_cfg, tmp_path):
+    from wnca.train.phases import resolve_resume
+    import dataclasses
+    cfg = dataclasses.replace(
+        tiny_cfg, tracking=dataclasses.replace(tiny_cfg.tracking, out_dir=str(tmp_path / "empty"))
+    )
+    with pytest.raises(FileNotFoundError, match="no checkpoint"):
+        resolve_resume("auto", tmp_path / "empty", cfg)
+
+
+def test_history_survives_the_checkpoint(tiny_cfg, small_mesh, tmp_path):
+    """A resumed run must be able to continue the training curve, not restart it."""
+    model, opt = _trained_one_step(tiny_cfg, small_mesh)
+    hist = {"train": [0.5, 0.4], "val": [0.6, 0.5], "sel": [0.7, 0.6], "probe": [{}, {}]}
+    path = save_checkpoint(tmp_path / "b.pt", model, tiny_cfg, opt, epoch=1, step=10,
+                           metric=0.6, extra={"history": hist})
+    blob = load_checkpoint(path, build_model(tiny_cfg, small_mesh), tiny_cfg)
+    assert blob["extra"]["history"]["sel"] == [0.7, 0.6]

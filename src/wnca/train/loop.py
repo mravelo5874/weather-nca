@@ -279,13 +279,23 @@ class Trainer:
 
 
 def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
-        bands=None, tracker=None) -> dict:
-    """Run the configured phase end to end. Returns the run history."""
+        bands=None, tracker=None, resume: dict | None = None,
+        optimizer: torch.optim.Optimizer | None = None) -> dict:
+    """Run the configured phase end to end. Returns the run history.
+
+    `resume` is a checkpoint blob whose optimizer state has already been loaded into the
+    trainer's optimizer by the caller. Restoring `step` matters as much as restoring the
+    weights: the learning-rate schedule is a function of the step counter, so a resume that
+    forgot it would silently restart the cosine decay from full learning rate and undo the
+    run's convergence.
+    """
     from ..data.dataset import make_loader
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     trainer = Trainer(cfg, model, mesh, cache, device, bands, tracker)
+    if optimizer is not None:
+        trainer.opt = optimizer  # carries the restored optimizer state
 
     # Pushforward consumes one window before supervision starts, so it needs one more target.
     pf = 1 if cfg.train.pushforward else 0
@@ -299,13 +309,28 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
     ckpt_path = timestamped_path(out_dir, cfg.phase)
     history: dict[str, list] = {"train": [], "val": [], "sel": [], "probe": []}
 
+    start_epoch = 0
+    if resume is not None:
+        # `epoch` is the 0-indexed epoch the checkpoint was saved AT, so resume from the next.
+        start_epoch = int(resume.get("epoch", -1)) + 1
+        trainer.step = int(resume.get("step", 0))
+        m = resume.get("metric")
+        trainer.best = float(m) if m is not None and np.isfinite(m) else float("inf")
+        history = resume.get("extra", {}).get("history", history)
+        print(f"resuming at epoch {start_epoch + 1}/{cfg.train.epochs}  "
+              f"(step {trainer.step}, best selection {trainer.best:.5f}, "
+              f"lr {trainer._lr_at(trainer.step, total_steps):.2e})")
+        if start_epoch >= cfg.train.epochs:
+            print("  checkpoint is already at or past the configured epoch count; nothing to do")
+            return {"history": history, "best": trainer.best, "checkpoint": str(ckpt_path)}
+
     sel_note = "" if cfg.train.ckpt_subsample >= 1.0 else f" on {cfg.train.ckpt_subsample:.0%} of val"
     print(f"phase {cfg.phase} | {sum(p.numel() for p in model.parameters()):,} params "
           f"| {len(train_loader)} train batches | selection = {cfg.train.ckpt_windows * 6}h rollout"
           f" ({len(sel_loader)} batches{sel_note})")
     print(f"checkpoints -> {ckpt_path.parent}")
 
-    for ep in range(cfg.train.epochs):
+    for ep in range(start_epoch, cfg.train.epochs):
         t0 = time.time()
         tr = trainer.run_epoch(train_loader, 1, True, total_steps)
         va = trainer.run_epoch(val_loader, 1, False)
@@ -323,7 +348,7 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
         if assert_finite(sel, "selection metric") and sel < trainer.best:
             trainer.best = sel
             save_checkpoint(ckpt_path, model, cfg, trainer.opt, epoch=ep, step=trainer.step,
-                            metric=sel, extra={"probe": probe})
+                            metric=sel, extra={"probe": probe, "history": history})
             flag = " *"
 
         line = (f"epoch {ep + 1:>2}/{cfg.train.epochs}  train {tr['loss']:.5f}  "
@@ -350,7 +375,8 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
 
         if _PREEMPTED["flag"]:
             p = save_checkpoint(out_dir / "preempted.pt", model, cfg, trainer.opt,
-                                epoch=ep, step=trainer.step, metric=sel)
+                                epoch=ep, step=trainer.step, metric=sel,
+                                extra={"history": history})
             print(f"  preempted -- state saved to {p}")
             break
 

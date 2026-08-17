@@ -19,7 +19,7 @@ from ..data.cache import build_cache
 from ..mesh.icosphere import build_mesh, mean_spacing_km
 from ..mesh.spectral import build_band_filters
 from ..models.nca import build_model
-from .checkpoint import warm_start
+from .checkpoint import latest_checkpoint, load_checkpoint, warm_start
 from .loop import fit
 
 
@@ -95,20 +95,52 @@ def setup(cfg: Config, device: str | None = None, verbose: bool = True):
     return mesh, cache, model, bands, device
 
 
-def run_phase(cfg: Config, device: str | None = None, out_dir: str | Path | None = None) -> dict:
-    """Train one phase end to end."""
+def resolve_resume(spec: str, out_dir: Path, cfg: Config) -> Path:
+    """Turn a `--resume` argument into a checkpoint path.
+
+    `auto` picks the newest checkpoint under the run directory, which is what you want after a
+    crash: the last epoch that actually improved the selection metric.
+    """
+    if spec != "auto":
+        p = Path(spec)
+        if not p.exists():
+            raise FileNotFoundError(f"resume checkpoint not found: {p}")
+        return p
+    found = latest_checkpoint(out_dir) or latest_checkpoint(cfg.tracking.out_dir)
+    if found is None:
+        raise FileNotFoundError(
+            f"--resume auto found no checkpoint under {out_dir} or {cfg.tracking.out_dir}"
+        )
+    return found
+
+
+def run_phase(cfg: Config, device: str | None = None, out_dir: str | Path | None = None,
+              resume: str | None = None) -> dict:
+    """Train one phase end to end, optionally resuming a crashed run."""
     mesh, cache, model, bands, device = setup(cfg, device)
 
     out_dir = Path(out_dir or Path(cfg.tracking.out_dir) / f"{cfg.phase}_{time.strftime('%Y%m%d_%H%M%S')}")
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg.dump_yaml(out_dir / "config.resolved.yaml")
 
-    if cfg.train.warm_start:
+    if cfg.train.warm_start and not resume:
         warm_start(cfg.train.warm_start, model, cfg, map_location=device)
 
     tracker = Tracker(cfg, out_dir)
+    blob = None
     try:
-        result = fit(cfg, model, mesh, cache, device, out_dir, bands=bands, tracker=tracker)
+        if resume:
+            path = resolve_resume(resume, out_dir, cfg)
+            # Build the optimizer the trainer will use, load into it, then hand the blob to
+            # fit() so step/epoch/best are restored alongside the weights.
+            opt = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr,
+                                    weight_decay=cfg.train.weight_decay)
+            blob = load_checkpoint(path, model, cfg, optimizer=opt, map_location=device)
+            print(f"resuming from {path.name}")
+            result = fit(cfg, model, mesh, cache, device, out_dir, bands=bands, tracker=tracker,
+                         resume=blob, optimizer=opt)
+        else:
+            result = fit(cfg, model, mesh, cache, device, out_dir, bands=bands, tracker=tracker)
     finally:
         tracker.finish()
 

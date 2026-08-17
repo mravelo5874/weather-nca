@@ -155,6 +155,54 @@ def _settled(ratios: np.ndarray, threshold: float) -> dict:
     }
 
 
+def format_per_channel(result: dict, cfg, threshold: float = 1.05) -> str:
+    """Sustained growth per variable and level -- the phase 2b check.
+
+    `n_substeps = 20` was measured on one band-limited variable. Coupled dynamics carry faster
+    adjustment processes, and a single-window CFL test cannot see per-window amplification that
+    compounds (M1 established that the hard way). If one variable is amplifying while the rest
+    are neutral, that variable is setting the sub-step budget for the whole state.
+
+    Mitigation order, unchanged: more sub-steps, larger perception radius, then semi-Lagrangian
+    pre-advection.
+    """
+    if "per_channel_growth" not in result:
+        return "(per-channel growth unavailable)"
+    g = result["per_channel_growth"]
+    keys = list(result["channels"])
+    v = cfg.variables
+
+    lines = [f"sustained per-window growth by variable (from window "
+             f"{result.get('sustained_from_window', '?')}; > {threshold} = amplifying)",
+             f"{'variable':>24} " + " ".join(f"{lv:>9}" for lv in v.levels)]
+    lines.append("-" * (25 + 10 * len(v.levels)))
+    for name in v.atmospheric:
+        row = []
+        for lv in v.levels:
+            k = f"{name}_{lv}"
+            if k in keys:
+                x = g[keys.index(k)]
+                row.append(f"{x:>8.3f}{'*' if x > threshold else ' '}")
+            else:
+                row.append(f"{'-':>9}")
+        lines.append(f"{name:>24} " + " ".join(row))
+    for name in v.surface:
+        if name in keys:
+            x = g[keys.index(name)]
+            lines.append(f"{name:>24} {x:>8.3f}{'*' if x > threshold else ''}")
+
+    bad = [(keys[i], g[i]) for i in range(len(keys)) if g[i] > threshold]
+    lines.append("")
+    if bad:
+        worst = max(bad, key=lambda t: t[1])
+        lines.append(f"{len(bad)}/{len(keys)} channels above {threshold}; worst "
+                     f"{worst[0]} at x{worst[1]:.3f}")
+        lines.append("  -> this variable sets the sub-step budget for the whole state")
+    else:
+        lines.append(f"all {len(keys)} channels at or below {threshold}")
+    return "\n".join(lines)
+
+
 def summarize(result: dict, threshold: float = 1.05) -> str:
     sus = result.get("sustained_growth", float("nan"))
     verdict = "stable" if sus <= threshold else "AMPLIFYING"

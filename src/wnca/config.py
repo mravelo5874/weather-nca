@@ -190,6 +190,11 @@ class TrainConfig:
     pushforward: bool = False
 
     ckpt_windows: int = 8  # ONE fixed selection metric, every phase, never compared across
+    # Fraction of validation start times the selection metric uses. An 8-window rollout over
+    # the full split costs more than the training pass itself at M2 sizes. The subset is
+    # evenly spaced and FIXED for the whole phase -- a resampled subset would make epoch-to-
+    # epoch comparison meaningless, which is M1 incident 2 in a new costume.
+    ckpt_subsample: float = 1.0
     ckpt_every_steps: int = 0  # 0 = epoch boundaries only
     warm_start: str | None = None  # checkpoint path to initialize from
     seed: int = 0

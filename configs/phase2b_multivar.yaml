@@ -1,14 +1,52 @@
-# Phase 2b -- multi-variable, 2 years. Isolates: coupling.
-# GATE: documented RMSE vs 2a.
+# Phase 2b -- multi-variable, 2 years. Isolates: COUPLING.
 #
-# Also the phase where `perturbation_growth` must be re-run PER VARIABLE: n_substeps = 20 was
-# measured on one band-limited field, and coupled dynamics carry faster adjustment processes.
+# GATE: documented RMSE vs the single-variable 2-year baseline.
+#
+# ---------------------------------------------------------------------------------------
+# Which run is the control?
+#
+# The plan's table says "documented RMSE vs 2a", but 2a is 39 years x 1 variable while this is
+# 2 years x 28 variables -- that comparison moves data volume AND state together, which is the
+# confound the 2a/2b split exists to remove. The four phases are really a 2x2:
+#
+#                    1 variable          28 variables
+#     2 years        phase 0             phase 2b        <- this run
+#     39 years       phase 2a            phase 2c
+#
+# So 2b's control is **phase 0**: same train years (2015-2016), same val (2017), same test
+# (2018), same optimizer and epoch budget. Only the state changes. 2c then tests whether the
+# data effect and the coupling effect compound.
+#
+# Caveat to record with the result: capacity is NOT held fixed (27.5k -> 1.03M params). That is
+# unavoidable rather than sloppy -- 28 physical + 32 hidden channels make the perception output
+# 240-dimensional against phase 0's 69, so a 128-wide MLP would be a bottleneck rather than a
+# control. The honest claim is "coupling + the capacity it requires", not "coupling alone".
+# ---------------------------------------------------------------------------------------
 phase: phase2b_multivar
 
 data:
-  train_years: [2015, 2016]
+  train_years: [2015, 2016]      # identical to phase 0
   val_years: [2017]
   test_years: [2018]
 
 train:
-  epochs: 12
+  # Matched to phase 0: 365 batches/epoch x 8 epochs = 2,920 gradient steps, the same budget.
+  epochs: 8
+  batch_size: 8
+  # Phase 0 used no warmup, so neither does this, or the schedule becomes another moving part.
+  # The zero-init head means training starts from the identity map and early gradients are
+  # small; grad_clip and the finiteness guard are the safety net if that proves optimistic.
+  warmup_steps: 0
+
+  # Measured on the 1660 Ti at this exact architecture (28ch, c_hidden 32, hidden_dim 512,
+  # n_layers 4, n_substeps 20): 3,722 ms per training batch at B=8, 2.10 GB peak.
+  #   train pass   365 batches  ~23 min
+  #   val pass     183 batches  ~4 min
+  #   selection    8-window rollout over the full val split  ~30 min   <- more than training
+  # The selection metric costing more than the training pass is indefensible for a metric whose
+  # only job is to rank checkpoints, so it runs on an evenly-spaced quarter of the validation
+  # start times. The subset is deterministic and fixed for the whole phase, so epoch-to-epoch
+  # comparison stays valid; it is a coarser estimate of the same quantity, not a different one.
+  # Net: ~34 min/epoch, ~4.5 h for the phase.
+  ckpt_windows: 8
+  ckpt_subsample: 0.25

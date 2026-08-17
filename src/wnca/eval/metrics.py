@@ -148,6 +148,93 @@ def rank_histogram(members: torch.Tensor, truth: torch.Tensor, n_bins: int | Non
     return counts / max(counts.sum(), 1.0)
 
 
+def channel_units(cfg: Config, normalizer) -> list[str]:
+    """Display unit per channel. Log-transformed channels are NOT in physical units."""
+    out = []
+    for i, c in enumerate(cfg.variables.channels()):
+        if normalizer.log_mask[i]:
+            out.append("log")
+        elif c.name.startswith("geopotential"):
+            out.append("m2/s2")
+        elif "wind" in c.name:
+            out.append("m/s")
+        elif "temperature" in c.name:
+            out.append("K")
+        else:
+            out.append("-")
+    return out
+
+
+def _scaled(sc: Scorecard, which: str, normalizer) -> np.ndarray:
+    """RMSE per (window, channel) in each channel's display unit."""
+    return sc.rmse(which) * normalizer.std[None, :]
+
+
+def format_level_table(sc: Scorecard, cfg: Config, normalizer, lead_hours: int = 24) -> str:
+    """Variable x level table at one lead. The natural layout for a multi-level atmosphere.
+
+    Log-transformed channels (specific humidity) are reported in **log units**, because a
+    difference in log space has no single physical scale. Usefully, d(log q) ~ dq/q, so an RMSE
+    of 0.10 there reads as roughly a 10% error in q.
+    """
+    i = lead_hours // HOURS_PER_WINDOW - 1
+    if not 0 <= i < sc.n_windows:
+        return f"(lead {lead_hours}h outside the scored range)"
+    m = _scaled(sc, "model", normalizer)[i]
+    p = _scaled(sc, "persistence", normalizer)[i]
+    keys = list(sc.channels)
+    v = cfg.variables
+    units = channel_units(cfg, normalizer)
+
+    lines = [f"RMSE at +{lead_hours}h   (skill vs persistence in parentheses)",
+             f"{'variable':>24} {'unit':>6} " + " ".join(f"{lv:>15}" for lv in v.levels)]
+    lines.append("-" * (31 + 16 * len(v.levels)))
+    for name in v.atmospheric:
+        row, unit = [], ""
+        for lv in v.levels:
+            k = f"{name}_{lv}"
+            if k in keys:
+                j = keys.index(k)
+                unit = units[j]
+                skill = 1 - m[j] / max(p[j], 1e-12)
+                row.append(f"{m[j]:>8.3g} ({skill:>4.0%})")
+            else:
+                row.append(f"{'-':>15}")
+        lines.append(f"{name:>24} {unit:>6} " + " ".join(row))
+
+    if v.surface:
+        lines.append("")
+        for name in v.surface:
+            if name in keys:
+                j = keys.index(name)
+                skill = 1 - m[j] / max(p[j], 1e-12)
+                lines.append(f"{name:>24} {units[j]:>6} {m[j]:>8.3g} ({skill:>4.0%})")
+    return "\n".join(lines)
+
+
+def format_channel_summary(sc: Scorecard, cfg: Config, normalizer,
+                           leads: tuple[int, ...] = (24, 72, 120)) -> str:
+    """One row per channel, RMSE across several leads. The full scorecard at a glance."""
+    idx = [(h, h // HOURS_PER_WINDOW - 1) for h in leads]
+    idx = [(h, i) for h, i in idx if 0 <= i < sc.n_windows]
+    m = _scaled(sc, "model", normalizer)
+    p = _scaled(sc, "persistence", normalizer)
+    units = channel_units(cfg, normalizer)
+    has_crps = sc.crps.any()
+
+    head = f"{'channel':>28} {'unit':>6} " + " ".join(f"{f'+{h}h':>12}" for h, _ in idx)
+    if has_crps:
+        head += f" {'CRPS@' + str(idx[0][0]) + 'h':>12}"
+    lines = [head, "-" * len(head)]
+    for j, key in enumerate(sc.channels):
+        row = " ".join(f"{m[i, j]:>7.3g} ({1 - m[i, j] / max(p[i, j], 1e-12):>3.0%})" for _, i in idx)
+        line = f"{key:>28} {units[j]:>6} {row}"
+        if has_crps:
+            line += f" {sc.mean_crps()[idx[0][1], j] * normalizer.std[j]:>12.3g}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def format_scorecard(sc: Scorecard, cfg: Config, normalizer, channel: str = "geopotential_500",
                      physical: bool = True) -> str:
     """Human-readable table for one channel, in the M1 evaluation format."""

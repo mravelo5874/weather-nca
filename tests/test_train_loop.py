@@ -147,3 +147,51 @@ def test_neutral_operator_has_no_transient():
     from wnca.eval.perturbation import _settled
     out = _settled([1.01] * 10, threshold=1.05)
     assert out["transient_windows"] == 0 and out["sustained_growth"] < 1.05
+
+
+# --- selection-metric subsampling ------------------------------------------------------
+
+def test_subset_is_deterministic_across_calls():
+    """The selection metric must score the SAME start times every epoch. A resampled subset
+    would make 'did this epoch improve?' meaningless -- M1 incident 2 in a new costume."""
+    import numpy as np
+    from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
+    ds = WeatherSeq(np.zeros((200, 5, 1), dtype=np.float32), n_out=8)
+    a = evenly_spaced_subset(ds, 0.25)
+    b = evenly_spaced_subset(ds, 0.25)
+    assert list(a.indices) == list(b.indices)
+
+
+def test_subset_spans_the_whole_split():
+    """Evenly spaced, not a prefix -- the subset must still cover the full seasonal cycle."""
+    import numpy as np
+    from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
+    ds = WeatherSeq(np.zeros((400, 5, 1), dtype=np.float32), n_out=8)
+    sub = evenly_spaced_subset(ds, 0.1)
+    idx = list(sub.indices)
+    assert idx[0] < 0.05 * len(ds) and idx[-1] > 0.95 * len(ds), idx[:3] + idx[-3:]
+    assert len(idx) == len(set(idx)), "duplicate indices"
+
+
+def test_subset_fraction_one_is_a_passthrough():
+    import numpy as np
+    from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
+    ds = WeatherSeq(np.zeros((50, 5, 1), dtype=np.float32), n_out=2)
+    assert evenly_spaced_subset(ds, 1.0) is ds
+
+
+def test_subset_rejects_bad_fraction():
+    import numpy as np
+    import pytest as _pytest
+    from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
+    ds = WeatherSeq(np.zeros((50, 5, 1), dtype=np.float32), n_out=2)
+    for bad in (0.0, -0.1, 1.5):
+        with _pytest.raises(ValueError, match="fraction"):
+            evenly_spaced_subset(ds, bad)
+
+
+def test_subset_never_empty():
+    import numpy as np
+    from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
+    ds = WeatherSeq(np.zeros((30, 5, 1), dtype=np.float32), n_out=2)
+    assert len(evenly_spaced_subset(ds, 0.001)) >= 1

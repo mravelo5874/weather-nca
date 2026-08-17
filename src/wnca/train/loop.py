@@ -292,14 +292,17 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
     train_loader = make_loader(cache, "train", cfg, n_out=1 + pf, shuffle=True)
     val_loader = make_loader(cache, "val", cfg, n_out=1, shuffle=False)
     sel_loader = make_loader(cache, "val", cfg, n_out=cfg.train.ckpt_windows, shuffle=False,
-                             batch_size=max(1, cfg.train.batch_size // 2))
+                             batch_size=max(1, cfg.train.batch_size // 2),
+                             subsample=cfg.train.ckpt_subsample)
 
     total_steps = max(len(train_loader) * cfg.train.epochs, 1)
     ckpt_path = timestamped_path(out_dir, cfg.phase)
     history: dict[str, list] = {"train": [], "val": [], "sel": [], "probe": []}
 
+    sel_note = "" if cfg.train.ckpt_subsample >= 1.0 else f" on {cfg.train.ckpt_subsample:.0%} of val"
     print(f"phase {cfg.phase} | {sum(p.numel() for p in model.parameters()):,} params "
-          f"| {len(train_loader)} train batches | selection = {cfg.train.ckpt_windows * 6}h rollout")
+          f"| {len(train_loader)} train batches | selection = {cfg.train.ckpt_windows * 6}h rollout"
+          f" ({len(sel_loader)} batches{sel_note})")
     print(f"checkpoints -> {ckpt_path.parent}")
 
     for ep in range(cfg.train.epochs):

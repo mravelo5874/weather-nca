@@ -98,10 +98,25 @@ def cmd_eval(args) -> int:
     print()
     print(format_scorecard(sc, cfg, cache.normalizer, channel=args.channel))
 
+    if cfg.c_phys > 1:
+        from .eval.metrics import format_channel_summary, format_level_table
+
+        print()
+        print(format_level_table(sc, cfg, cache.normalizer, lead_hours=args.lead))
+        print()
+        print(format_channel_summary(sc, cfg, cache.normalizer))
+        print("\n  specific humidity is reported in log units; d(log q) ~ dq/q, so 0.10 "
+              "reads as roughly a 10% error in q.")
+
     print("\n--- perturbation growth (the direct diagnostic) ---")
     pg = perturbation_growth(model, cfg, cache, split=args.split, device=device,
                              n_windows=min(cfg.eval.max_windows, 20))
     print(pg_summary(pg))
+    if cfg.c_phys > 1:
+        from .eval.perturbation import format_per_channel
+
+        print()
+        print(format_per_channel(pg, cfg))
 
     if bands is not None and cfg.model.stochastic:
         from .eval.spectrum import member_spectra, summarize as sp_summary
@@ -187,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--checkpoint", default=None)
             p.add_argument("--split", default="test", choices=("train", "val", "test"))
             p.add_argument("--channel", default="geopotential_500")
+            p.add_argument("--lead", type=int, default=24,
+                           help="lead hours for the variable x level table")
 
     args = ap.parse_args(argv)
     return args.func(args)

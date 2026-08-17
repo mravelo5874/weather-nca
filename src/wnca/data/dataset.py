@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 
 from ..config import Config
 from .cache import MeshCache
@@ -41,6 +41,24 @@ class WeatherSeq(Dataset):
         return prev, cur, tgt
 
 
+def evenly_spaced_subset(dataset: Dataset, fraction: float) -> Dataset:
+    """Deterministic evenly-spaced subset.
+
+    Deterministic is the point: the selection metric must be computed on the *same* start times
+    every epoch, or "did this epoch improve?" stops meaning anything -- the same class of bug as
+    M1's incommensurable checkpoint metrics. Evenly spaced rather than random so the subset
+    still covers the whole seasonal cycle of the validation year.
+    """
+    n = len(dataset)
+    if not 0 < fraction <= 1.0:
+        raise ValueError(f"subset fraction must be in (0, 1], got {fraction}")
+    if fraction == 1.0:
+        return dataset
+    k = max(1, int(round(n * fraction)))
+    idx = np.unique(np.linspace(0, n - 1, k).astype(int))
+    return Subset(dataset, idx.tolist())
+
+
 def make_loader(
     cache: MeshCache,
     split: str,
@@ -49,10 +67,12 @@ def make_loader(
     shuffle: bool | None = None,
     batch_size: int | None = None,
     num_workers: int = 0,
+    subsample: float = 1.0,
 ) -> DataLoader:
     shuffle = (split == "train") if shuffle is None else shuffle
+    ds = evenly_spaced_subset(WeatherSeq(cache.split(split).array, n_out), subsample)
     return DataLoader(
-        WeatherSeq(cache.split(split).array, n_out),
+        ds,
         batch_size=batch_size or cfg.train.batch_size,
         shuffle=shuffle,
         drop_last=shuffle,

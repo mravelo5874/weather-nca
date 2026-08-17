@@ -1,0 +1,65 @@
+# Phase 2b' -- phase 2b with its two measured failures fixed. Isolates: THE FIX.
+#
+# GATE (all three, against phase 2b on the same splits):
+#   1. sustained perturbation growth <= 1.05, and no single variable above it
+#   2. 2m_temperature skill POSITIVE at +24h (2b: -48%)
+#   3. long-lead RMSE bounded near climatology rather than diverging (2b: 3.2x clim at 360h)
+#
+# Everything else is identical to phase 2b -- same splits, same capacity, same epoch budget --
+# so this is a controlled test of one change bundle, not a new experiment.
+#
+# ---------------------------------------------------------------------------------------
+# Why these two changes, and why together
+#
+# They are independent fixes for two independent failures, and running them separately would
+# cost ~9 h each to answer questions that do not interact: solar forcing is a conditioning
+# input that cannot affect CFL, and the sub-step budget cannot affect the diurnal cycle. If
+# 2b' fails a gate, the per-variable growth table and the 2t skill curve say immediately
+# which fix did not take.
+#
+# 1. Solar forcing (state.solar_forcing).
+#    2b had no time-varying conditioning at all, so the diurnal cycle was unrepresentable.
+#    2m temperature scored -48% skill at +24h -- worse than doing nothing -- because 24h is
+#    exactly one diurnal period, so persistence compares the same local solar time. Model
+#    skill dipped at 24h and 48h and was positive between; temperature_850, a free-atmosphere
+#    control, showed no such structure. Adds 3 conditioning channels: cos(solar zenith),
+#    sin/cos(day of year).
+#
+# 2. n_substeps 20 -> 40, dt 0.05 -> 0.025.
+#    n_substeps = 20 came from an M1 sweep at U = 30 m/s. The 250 hPa jet here reaches
+#    102 m/s. Re-running that sweep at jet speed (scripts, docs/milestone-2-findings.md):
+#
+#        substeps   CFL    RMSE      max|f|
+#              20   0.49   0.00644   1.053     <- 5.3% amplitude gain per window
+#              40   0.25   0.00432   1.027
+#              80   0.12   0.00362   1.014
+#
+#    The 5.3% overshoot matches the measured sustained growth (x1.062 overall, x1.094 for
+#    v_250), and growth is worst exactly where the winds are fastest. 40 halves the overshoot;
+#    80 would cost 4x for another halving, so 40 is the trade.
+#
+#    dt halves alongside so that dt * n_substeps stays 1.0. Without that, doubling the
+#    sub-step count would also double the effective integration length per window, and the
+#    run would confound "more, smaller steps" with "a longer step" -- two changes wearing one
+#    coat, which is what the 2a/2b split exists to avoid.
+# ---------------------------------------------------------------------------------------
+phase: phase2b_prime
+
+data:
+  train_years: [2015, 2016]      # identical to phase 0 and 2b
+  val_years: [2017]
+  test_years: [2018]
+
+state:
+  solar_forcing: true
+
+model:
+  n_substeps: 40
+  dt: 0.025
+
+train:
+  epochs: 8                      # same gradient-step budget as 2b
+  batch_size: 8
+  warmup_steps: 0
+  ckpt_windows: 8
+  ckpt_subsample: 0.25

@@ -81,6 +81,16 @@ class MeshCache:
         tp = self.root / f"times_{name}.npy"
         return SplitView(arr, np.load(tp, allow_pickle=True) if tp.exists() else None)
 
+    def times(self, name: str) -> np.ndarray:
+        """Timestamps for a split. Synthetic data has none, so a 6-hourly series is generated
+        -- the solar forcing needs *a* clock, and for synthetic fields any consistent one does."""
+        from .forcing import synthetic_times
+
+        view = self.split(name)
+        if view.times is not None:
+            return view.times
+        return synthetic_times(len(view))
+
     def climatology(self) -> np.ndarray:
         """Train-split time mean, [N, C], normalized units. The baseline comes from train only."""
         p = self.root / "climatology.npy"

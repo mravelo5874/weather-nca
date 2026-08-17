@@ -23,11 +23,13 @@ def _trainer(cfg, mesh, cache, **train_over):
     return cfg, Trainer(cfg, model, mesh, cache, device="cpu")
 
 
-def _batch(cfg, mesh, n_out, B=2):
+def _batch(cfg, mesh, n_out, B=2, start=3):
+    """Includes the absolute time index, which the solar forcing is keyed on."""
     N = len(mesh["v"])
     torch.manual_seed(1)
     return Batch(torch.randn(B, N, cfg.c_phys), torch.randn(B, N, cfg.c_phys),
-                 torch.randn(B, n_out, N, cfg.c_phys))
+                 torch.randn(B, n_out, N, cfg.c_phys),
+                 torch.arange(start, start + B))
 
 
 def test_no_pushforward_has_zero_offset(tiny_cfg, small_mesh, tiny_cache):
@@ -82,9 +84,10 @@ def test_second_order_tendency_is_nonzero_under_pushforward(tiny_cfg, small_mesh
     captured = {}
     orig = tr.model._cond
 
-    def spy(state, static, prev_phys):
-        out = orig(state, static, prev_phys)
-        captured.setdefault("tend", out[..., cfg.state.c_static:].abs().max().item())
+    def spy(state, static, prev_phys, forcing=None):
+        out = orig(state, static, prev_phys, forcing)
+        # cond is [static | solar forcing | tendency], so the tendency starts past both.
+        captured.setdefault("tend", out[..., cfg.state.c_static + cfg.c_forcing:].abs().max().item())
         return out
 
     tr.model._cond = spy

@@ -24,6 +24,16 @@
 # ---------------------------------------------------------------------------------------
 phase: phase2b_multivar
 
+# Pinned to the values this run actually used. base.yaml has since turned solar forcing on by
+# default (phase 2b is what showed it was needed), and pinning keeps this config able to load
+# and re-evaluate the checkpoint it produced -- the arch hash includes solar_forcing.
+state:
+  solar_forcing: false
+
+model:
+  n_substeps: 20
+  dt: 0.05
+
 data:
   train_years: [2015, 2016]      # identical to phase 0
   val_years: [2017]

@@ -37,6 +37,7 @@ def perturbation_growth(
     per_channel: bool = True,
     seed: int = 0,
     threshold: float = 1.05,
+    mesh: dict | None = None,
 ) -> dict:
     """Finite-amplitude growth: roll out from x0 and from x0 + delta, track ||difference||.
 
@@ -66,9 +67,21 @@ def perturbation_growth(
     total, per_ch = [], []
     n_windows = min(n_windows, len(series) - start - 1)
 
-    for _ in range(n_windows):
-        a = model.forecast_step(a, st, pa, z)
-        b = model.forecast_step(b, st, pb, z)
+    # Both trajectories get the SAME forcing: this measures sensitivity to the state, not to
+    # a difference in external forcing.
+    solar = None
+    if cfg.state.solar_forcing:
+        if mesh is None:
+            raise ValueError("perturbation_growth needs `mesh` when state.solar_forcing is on")
+        from ..data.forcing import SolarForcing
+
+        solar = SolarForcing(cache.times(split), mesh, device)
+    fw_all = solar.window(torch.tensor([start], device=device), n_windows) if solar else None
+
+    for w in range(n_windows):
+        fw = fw_all[:, w] if fw_all is not None else None
+        a = model.forecast_step(a, st, pa, z, fw)
+        b = model.forecast_step(b, st, pb, z, fw)
         pa, pb = a[..., : cfg.c_phys], b[..., : cfg.c_phys]
         diff = b - a
         total.append(float(diff.norm()))
@@ -100,7 +113,7 @@ def perturbation_growth(
 
 @torch.no_grad()
 def hidden_rms(model, cfg: Config, cache, split: str = "test", start: int = 5,
-               n_windows: int = 12, device: str = "cpu") -> np.ndarray:
+               n_windows: int = 12, device: str = "cpu", mesh: dict | None = None) -> np.ndarray:
     """Hidden-channel RMS through a rollout.
 
     Unbounded growth means the automaton is driving its latent state off-distribution, a
@@ -113,10 +126,21 @@ def hidden_rms(model, cfg: Config, cache, split: str = "test", start: int = 5,
     prev = torch.from_numpy(np.array(series[start - 1], dtype=np.float32)).unsqueeze(0).to(device)
     cur = torch.from_numpy(np.array(series[start], dtype=np.float32)).unsqueeze(0).to(device)
 
+    n_windows = min(n_windows, len(series) - start - 1)
+    fw_all = None
+    if cfg.state.solar_forcing:
+        if mesh is None:
+            raise ValueError("hidden_rms needs `mesh` when state.solar_forcing is on")
+        from ..data.forcing import SolarForcing
+
+        fw_all = SolarForcing(cache.times(split), mesh, device).window(
+            torch.tensor([start], device=device), n_windows)
+
     state, p = model.seed(cur), prev
     out = []
-    for _ in range(min(n_windows, len(series) - start - 1)):
-        state = model.forecast_step(state, st, p)
+    for w in range(n_windows):
+        state = model.forecast_step(state, st, p, None,
+                                    fw_all[:, w] if fw_all is not None else None)
         p = state[..., : cfg.c_phys]
         out.append(float(state[..., cfg.c_phys :].pow(2).mean().sqrt()))
         if cfg.model.reseed_hidden:

@@ -203,9 +203,12 @@ def test_multivar_model_roundtrips_shapes(mv_cfg, small_mesh):
     N = len(small_mesh["v"])
     cur = torch.randn(2, N, cfg.c_phys)
     with torch.no_grad():
+        from wnca.data.forcing import SolarForcing, synthetic_times
+
+        forcing = SolarForcing(synthetic_times(20), small_mesh).window(torch.arange(3, 5), 2)
         out = model.rollout(
             model.seed(cur), torch.randn(2, N, cfg.state.c_static), 2,
-            prev_phys=torch.randn(2, N, cfg.c_phys),
+            prev_phys=torch.randn(2, N, cfg.c_phys), forcing=forcing,
         )
     assert out.shape == (2, 2, N, 28)
     assert cfg.c_state == 28 + cfg.state.c_hidden

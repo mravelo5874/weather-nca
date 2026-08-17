@@ -110,7 +110,7 @@ def cmd_eval(args) -> int:
 
     print("\n--- perturbation growth (the direct diagnostic) ---")
     pg = perturbation_growth(model, cfg, cache, split=args.split, device=device,
-                             n_windows=min(cfg.eval.max_windows, 20))
+                             n_windows=min(cfg.eval.max_windows, 20), mesh=mesh)
     print(pg_summary(pg))
     if cfg.c_phys > 1:
         from .eval.perturbation import format_per_channel
@@ -132,11 +132,11 @@ def cmd_benchmark(args) -> int:
 
     cfg = load_config(args.config, _parse_sets(args.sets), smoke=args.smoke)
     mesh, cache, model, bands, device = setup(cfg, args.device)
-    _benchmark(cfg, model, cache, device)
+    _benchmark(cfg, model, cache, device, mesh=mesh)
     return 0
 
 
-def _benchmark(cfg, model, cache, device, n_iter: int = 5):
+def _benchmark(cfg, model, cache, device, n_iter: int = 5, mesh=None):
     """Measure a forecast step, forward and backward, and report memory.
 
     The dominant term is `M x n_substeps` network evaluations per forecast step. Put the
@@ -152,13 +152,20 @@ def _benchmark(cfg, model, cache, device, n_iter: int = 5):
     prev = torch.from_numpy(np.array(series[0:B], dtype=np.float32)).to(device)
     st = torch.from_numpy(cache.static).float().to(device).unsqueeze(0).expand(B, -1, -1)
 
+    forcing = None
+    if cfg.state.solar_forcing:
+        from .data.forcing import SolarForcing
+
+        forcing = SolarForcing(cache.times("train"), mesh, device).window(
+            torch.arange(1, 1 + B, device=device), 1)
+
     model.train()
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
     def once():
         pred, ovf = model.rollout_ensemble(model.seed(cur), st, 1, prev_phys=prev,
-                                           n_members=M, return_aux=True)
+                                           n_members=M, return_aux=True, forcing=forcing)
         loss = pred.pow(2).mean() + ovf
         loss.backward()
         model.zero_grad(set_to_none=True)

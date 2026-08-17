@@ -90,9 +90,9 @@ class ControlGNN(ForecastModel):
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
-    def forecast_step(self, state, static, prev_phys=None, z=None):
+    def forecast_step(self, state, static, prev_phys=None, z=None, forcing=None):
         """One non-local pass = one 6 h window. No sub-steps: that is the whole point."""
-        cond = self._cond(state, static, prev_phys)
+        cond = self._cond(state, static, prev_phys, forcing)
         h = self.encoder(torch.cat([state, cond], dim=-1))
 
         mod = None

@@ -51,6 +51,7 @@ class Batch:
     prev: torch.Tensor  # [B, N, C]
     cur: torch.Tensor
     tgt: torch.Tensor  # [B, n_out, N, C]
+    idx: torch.Tensor | None = None  # absolute time index of `cur`, for the solar forcing
 
 
 class Trainer:
@@ -68,6 +69,16 @@ class Trainer:
         self.area_w = area_weights(mesh["area"], device)  # [N, 1]
         self.chan_w = channel_weights(cfg, device)  # [1, C]
         self.static = torch.from_numpy(cache.static).float().to(device)  # [N, c_static]
+
+        # Solar forcing is keyed on absolute time index, and the index spaces of the splits are
+        # different, so one table per split rather than one global one.
+        self.solar = {}
+        if cfg.state.solar_forcing and cache is not None:
+            from ..data.forcing import SolarForcing
+
+            for sp in ("train", "val", "test"):
+                self.solar[sp] = SolarForcing(cache.times(sp), mesh, device)
+        self.split = "train"
 
         self.opt = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr,
                                      weight_decay=cfg.train.weight_decay)
@@ -97,6 +108,13 @@ class Trainer:
     def _static_for(self, b: int) -> torch.Tensor:
         return self.static.unsqueeze(0).expand(b, -1, -1)
 
+    def _forcing_for(self, batch: Batch, n_out: int, shift: int = 0):
+        """[B, n_out, N, 3] solar forcing at each window's target time, or None if disabled."""
+        sf = self.solar.get(self.split)
+        if sf is None or batch.idx is None:
+            return None
+        return sf.window(batch.idx.to(self.device) + shift, n_out)
+
     def _forward(self, batch: Batch, n_out: int, n_members: int, train: bool):
         """Returns (pred, overflow, offset).
 
@@ -107,6 +125,7 @@ class Trainer:
         cfg = self.cfg
         cur, prev = batch.cur, batch.prev
         st = self._static_for(cur.shape[0])
+        forcing = self._forcing_for(batch, n_out)
 
         # Sanchez-Gonzalez-style input noise on the physical channels (M1's noise_std).
         state = self.model.seed(cur)
@@ -120,7 +139,9 @@ class Trainer:
         offset = 0
         if train and cfg.train.pushforward:
             with torch.no_grad():
-                stepped = self.model.forecast_step(state, st, prev)
+                # The pushforward window is window 0, so it takes the unshifted forcing.
+                f0 = forcing[:, 0] if forcing is not None else None
+                stepped = self.model.forecast_step(state, st, prev, None, f0)
                 # The field one window before `stepped` is the ORIGINAL cur, not stepped's own
                 # physical channels -- using the latter zeroes the second-order tendency.
                 prev = cur
@@ -128,10 +149,12 @@ class Trainer:
                     stepped = self.model.reseed_hidden(stepped)
             state = stepped.detach()
             offset = 1  # predictions now start at window +2, so targets shift by one
+            if forcing is not None:  # the supervised windows also shift by one
+                forcing = self._forcing_for(batch, n_out, shift=1)
 
         M = n_members if cfg.model.stochastic else 1
         pred, ovf = self.model.rollout_ensemble(
-            state, st, n_out, prev_phys=prev, n_members=M, return_aux=True
+            state, st, n_out, prev_phys=prev, n_members=M, return_aux=True, forcing=forcing
         )
         return pred, ovf, offset
 
@@ -170,18 +193,20 @@ class Trainer:
         return total, float(field.item()), parts
 
     # ---- epochs ----
-    def run_epoch(self, loader, n_out: int, train: bool, total_steps: int = 1) -> dict:
+    def run_epoch(self, loader, n_out: int, train: bool, total_steps: int = 1,
+                  split: str = "train") -> dict:
         """One pass. Returns the CLEAN field term (overflow optimized but not reported), so
         the printed number stays comparable across configurations."""
         cfg = self.cfg
+        self.split = split  # selects the right solar-forcing table
         self.model.train(train)
         acc, nb = 0.0, 0
         M = cfg.ensemble.m_train if train else cfg.ensemble.m_val
 
-        for prev, cur, tgt in loader:
+        for prev, cur, tgt, idx in loader:
             batch = Batch(prev.to(self.device, non_blocking=True),
                           cur.to(self.device, non_blocking=True),
-                          tgt.to(self.device, non_blocking=True))
+                          tgt.to(self.device, non_blocking=True), idx)
             with torch.set_grad_enabled(train):
                 with torch.autocast(self.amp_device, enabled=self.use_amp):
                     pred, ovf, offset = self._forward(batch, n_out, M, train)
@@ -213,13 +238,14 @@ class Trainer:
         return {"loss": acc / max(nb, 1), "batches": nb}
 
     @torch.no_grad()
-    def selection_metric(self, loader) -> float:
+    def selection_metric(self, loader) -> float:  # noqa: D401
         """ONE fixed selection metric for every phase: `ckpt_windows`-window rollout score on
         validation. Never compared across phase boundaries -- M1 incident 2."""
         self.model.eval()
+        self.split = "val"
         acc, nb = 0.0, 0
-        for prev, cur, tgt in loader:
-            batch = Batch(prev.to(self.device), cur.to(self.device), tgt.to(self.device))
+        for prev, cur, tgt, idx in loader:
+            batch = Batch(prev.to(self.device), cur.to(self.device), tgt.to(self.device), idx)
             pred, ovf, offset = self._forward(batch, self.cfg.train.ckpt_windows,
                                               self.cfg.ensemble.m_val, False)
             _, clean, _ = self._loss(pred, batch.tgt[:, offset:], ovf)
@@ -240,15 +266,18 @@ class Trainer:
         if not self.cfg.model.stochastic:
             return {}
         self.model.eval()
-        prev, cur, tgt = next(iter(loader))
+        self.split = "val"
+        prev, cur, tgt, idx = next(iter(loader))
         prev, cur, tgt = prev.to(self.device), cur.to(self.device), tgt.to(self.device)
+        probe_forcing = self._forcing_for(Batch(prev, cur, tgt, idx), n_windows)
         # The probe cannot look further ahead than the loader supplies targets for.
         n_windows = max(1, min(n_windows, tgt.shape[1]))
         st = self._static_for(cur.shape[0])
         state = self.model.seed(cur)
         M = self.cfg.ensemble.m_val
 
-        pred = self.model.rollout_ensemble(state, st, n_windows, prev_phys=prev, n_members=M)
+        pred = self.model.rollout_ensemble(state, st, n_windows, prev_phys=prev, n_members=M,
+                                           forcing=probe_forcing)
         truth = tgt[:, n_windows - 1]
         last = pred[:, :, n_windows - 1]  # [B, M, N, C]
 
@@ -257,7 +286,8 @@ class Trainer:
         ss = spread_skill_ratio(last, truth, self.area_w).mean().item()
 
         z0 = torch.zeros(cur.shape[0], 1, self.cfg.model.noise_dim, device=self.device)
-        det = self.model.rollout_ensemble(state, st, n_windows, prev_phys=prev, n_members=1, z=z0)
+        det = self.model.rollout_ensemble(state, st, n_windows, prev_phys=prev, n_members=1, z=z0,
+                                          forcing=probe_forcing)
         zero_noise_gap = (det[:, 0, n_windows - 1] - last.mean(dim=1)).abs().mean().item()
 
         return {
@@ -333,7 +363,7 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
     for ep in range(start_epoch, cfg.train.epochs):
         t0 = time.time()
         tr = trainer.run_epoch(train_loader, 1, True, total_steps)
-        va = trainer.run_epoch(val_loader, 1, False)
+        va = trainer.run_epoch(val_loader, 1, False, split="val")
         sel = trainer.selection_metric(sel_loader)
         # Probe on the selection loader: it carries multi-window targets, and spread is only
         # meaningful a few windows out.

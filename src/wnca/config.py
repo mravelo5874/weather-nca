@@ -108,6 +108,10 @@ class StateConfig:
     c_hidden: int = 32
     c_static: int = 4  # orography, land-sea mask, sin(lat), cos(lat)
     second_order: bool = True  # feed the tendency (x_t - x_{t-1}) as conditioning
+    # Top-of-atmosphere solar geometry (cos zenith + annual cycle) as time-varying
+    # conditioning. Without it the diurnal cycle is unrepresentable and 2m_temperature scores
+    # WORSE than persistence at 24 h. Measured in phase 2b; see docs/milestone-2-findings.md.
+    solar_forcing: bool = True
 
 
 @dataclass(frozen=True)
@@ -240,8 +244,15 @@ class Config:
         return self.c_phys + self.state.c_hidden
 
     @property
+    def c_forcing(self) -> int:
+        from .data.forcing import N_SOLAR_CHANNELS
+
+        return N_SOLAR_CHANNELS if self.state.solar_forcing else 0
+
+    @property
     def c_cond(self) -> int:
-        return self.state.c_static + (self.c_phys if self.state.second_order else 0)
+        return (self.state.c_static + self.c_forcing
+                + (self.c_phys if self.state.second_order else 0))
 
     @property
     def cache_dir(self) -> Path:
@@ -266,6 +277,12 @@ class Config:
             "gnn_hops": self.model.gnn_hops,
             "gnn_hidden": self.model.gnn_hidden,
         }
+        # Optional features are included only when ENABLED, so turning one on changes the hash
+        # (it changes the parameter shapes) while leaving checkpoints made before the feature
+        # existed still loadable. Adding a field unconditionally would invalidate every prior
+        # checkpoint in the project.
+        if self.state.solar_forcing:
+            payload["solar_forcing"] = True
         blob = json.dumps(payload, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:16]
 

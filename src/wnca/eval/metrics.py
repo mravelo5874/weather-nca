@@ -80,6 +80,11 @@ def evaluate(
     M = n_members if n_members is not None else (cfg.ensemble.m_test if cfg.model.stochastic else 1)
 
     aw = area_weights(mesh["area"], device)
+    solar = None
+    if cfg.state.solar_forcing:
+        from ..data.forcing import SolarForcing
+
+        solar = SolarForcing(cache.times(split), mesh, device)
     clim = torch.from_numpy(cache.climatology()).float().to(device)  # [N, C] from TRAIN only
     channels = tuple(c.key for c in cfg.variables.channels())
     sc = Scorecard(max_windows, len(channels), channels)
@@ -97,7 +102,9 @@ def evaluate(
         ).unsqueeze(0).to(device)  # [1, W, N, C]
 
         st = torch.from_numpy(cache.static).float().to(device).unsqueeze(0)
-        pred = model.rollout_ensemble(model.seed(cur), st, max_windows, prev_phys=prev, n_members=M)
+        fw = solar.window(torch.tensor([s0], device=device), max_windows) if solar else None
+        pred = model.rollout_ensemble(model.seed(cur), st, max_windows, prev_phys=prev,
+                                      n_members=M, forcing=fw)
         # pred [1, M, W, N, C]
 
         mean = pred.mean(dim=1)  # [1, W, N, C]

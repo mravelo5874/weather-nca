@@ -15,10 +15,19 @@ import numpy as np
 import pytest
 import torch
 
+from wnca.data.forcing import SolarForcing, synthetic_times
 from wnca.models.nca import WeatherNCA, build_model
 from wnca.train.checkpoint import (
     assert_finite, latest_checkpoint, load_checkpoint, save_checkpoint, timestamped_path, warm_start,
 )
+
+
+def _forcing(cfg, mesh, B, W, start=3):
+    """Solar forcing of the right shape; the model refuses to run without it."""
+    if not cfg.state.solar_forcing:
+        return None
+    return SolarForcing(synthetic_times(start + W + 8), mesh).window(
+        torch.arange(start, start + B), W)
 
 
 def _trained_one_step(cfg, mesh):
@@ -29,7 +38,8 @@ def _trained_one_step(cfg, mesh):
     prev = torch.randn(2, N, cfg.c_phys)
     st = torch.randn(2, N, cfg.state.c_static)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
-    pred = model.rollout(model.seed(cur), st, 1, prev_phys=prev)
+    pred = model.rollout(model.seed(cur), st, 1, prev_phys=prev,
+                         forcing=_forcing(cfg, mesh, 2, 1))
     (pred - torch.randn_like(pred)).pow(2).mean().backward()
     opt.step()
     return model, opt
@@ -41,7 +51,8 @@ def test_untrained_model_is_the_identity_map(tiny_cfg, small_mesh):
     N = len(small_mesh["v"])
     cur = torch.randn(1, N, tiny_cfg.c_phys)
     with torch.no_grad():
-        out = model.rollout(model.seed(cur), torch.randn(1, N, tiny_cfg.state.c_static), 1)
+        out = model.rollout(model.seed(cur), torch.randn(1, N, tiny_cfg.state.c_static), 1,
+                            forcing=_forcing(tiny_cfg, small_mesh, 1, 1))
     assert torch.allclose(out[:, 0], cur, atol=1e-6), "zero-init model is not the identity map"
 
 
@@ -76,7 +87,8 @@ def test_reloaded_model_differs_from_identity(tiny_cfg, small_mesh, tmp_path):
     N = len(small_mesh["v"])
     cur = torch.randn(1, N, tiny_cfg.c_phys)
     with torch.no_grad():
-        out = fresh.rollout(fresh.seed(cur), torch.randn(1, N, tiny_cfg.state.c_static), 1)
+        out = fresh.rollout(fresh.seed(cur), torch.randn(1, N, tiny_cfg.state.c_static), 1,
+                            forcing=_forcing(tiny_cfg, small_mesh, 1, 1))
     assert not torch.allclose(out[:, 0], cur, atol=1e-6), "reloaded model still an identity map"
 
 
@@ -186,6 +198,9 @@ class _StubCache:
 
     def __init__(self, mesh, cfg):
         self.static = np.zeros((len(mesh["v"]), cfg.state.c_static), dtype=np.float32)
+
+    def times(self, split):
+        return synthetic_times(64)
 
 
 def test_resume_auto_picks_the_newest_checkpoint(tiny_cfg, small_mesh, tmp_path):

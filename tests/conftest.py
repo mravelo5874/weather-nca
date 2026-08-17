@@ -52,3 +52,25 @@ def tiny_cfg(tmp_path_factory):
 def tiny_cache(tiny_cfg, small_mesh):
     from wnca.data.cache import build_cache
     return build_cache(tiny_cfg, small_mesh, verbose=False)
+
+
+@pytest.fixture
+def forcing_for():
+    """Build solar forcing of the right shape for a direct model call.
+
+    Tests that exercise shapes, noise or checkpointing do not care what the sun is doing, but
+    the model refuses to run without forcing when `solar_forcing` is on -- deliberately, so a
+    broken pipeline cannot silently train on permanent night.
+    """
+    import numpy as np
+    import torch
+
+    from wnca.data.forcing import SolarForcing, synthetic_times
+
+    def make(cfg, mesh, B, n_windows, start=3):
+        if not cfg.state.solar_forcing:
+            return None
+        sf = SolarForcing(synthetic_times(start + n_windows + 8), mesh)
+        return sf.window(torch.arange(start, start + B), n_windows)
+
+    return make

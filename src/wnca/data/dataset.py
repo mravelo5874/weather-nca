@@ -18,7 +18,7 @@ from .cache import MeshCache
 class WeatherSeq(Dataset):
     """Yields (prev, cur, targets) with targets covering `n_out` consecutive 6 h windows.
 
-    Shapes: prev/cur [N, C], targets [n_out, N, C]. The backing array is a read-only memmap,
+    Shapes: prev/cur [N, C], targets [n_out, N, C], plus the absolute time index of `cur`. The backing array is a read-only memmap,
     so a worker reads only the timesteps it needs rather than materializing the split.
     """
 
@@ -38,7 +38,9 @@ class WeatherSeq(Dataset):
         prev = torch.from_numpy(np.array(self.x[i], dtype=np.float32))
         cur = torch.from_numpy(np.array(self.x[i + 1], dtype=np.float32))
         tgt = torch.from_numpy(np.array(self.x[i + 2 : i + 2 + self.n_out], dtype=np.float32))
-        return prev, cur, tgt
+        # Absolute index of `cur`; window k targets index (i + 1) + k, which is what the
+        # solar forcing is evaluated at.
+        return prev, cur, tgt, i + 1
 
 
 def evenly_spaced_subset(dataset: Dataset, fraction: float) -> Dataset:

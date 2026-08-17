@@ -7,8 +7,17 @@ decorative one that scores well and means nothing.
 import pytest
 import torch
 
+from wnca.data.forcing import SolarForcing, synthetic_times
 from wnca.models.nca import WeatherNCA
 from wnca.models.perception import MeshPerception
+
+
+def _forcing(cfg, mesh, B, W, start=3):
+    """Solar forcing of the right shape; the model refuses to run without it."""
+    if not cfg.state.solar_forcing:
+        return None
+    return SolarForcing(synthetic_times(start + W + 8), mesh).window(
+        torch.arange(start, start + B), W)
 
 
 def _model(cfg, mesh, stochastic=True):
@@ -39,8 +48,8 @@ def test_film_is_identity_at_init(tiny_cfg, small_mesh):
     torch.nn.init.normal_(m.update.head.weight, std=0.01)
     cur, prev, st = _inputs(cfg, small_mesh)
     with torch.no_grad():
-        a = m.forecast_step(m.seed(cur), st, prev, torch.randn(2, cfg.model.noise_dim))
-        b = m.forecast_step(m.seed(cur), st, prev, torch.zeros(2, cfg.model.noise_dim))
+        a = m.forecast_step(m.seed(cur), st, prev, torch.randn(2, cfg.model.noise_dim), _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
+        b = m.forecast_step(m.seed(cur), st, prev, torch.zeros(2, cfg.model.noise_dim), _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
     assert torch.allclose(a, b, atol=1e-6), "FiLM is not identity at init"
 
 
@@ -49,9 +58,9 @@ def test_zero_noise_equals_deterministic_path(tiny_cfg, small_mesh):
     cfg, m = _model(tiny_cfg, small_mesh, stochastic=True)
     cur, prev, st = _inputs(cfg, small_mesh)
     with torch.no_grad():
-        stoch_zero = m.forecast_step(m.seed(cur), st, prev, torch.zeros(2, cfg.model.noise_dim))
+        stoch_zero = m.forecast_step(m.seed(cur), st, prev, torch.zeros(2, cfg.model.noise_dim), _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
         m.update.stochastic = False
-        deterministic = m.forecast_step(m.seed(cur), st, prev, None)
+        deterministic = m.forecast_step(m.seed(cur), st, prev, None, _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
     assert torch.allclose(stoch_zero, deterministic, atol=1e-6)
 
 
@@ -60,7 +69,7 @@ def test_nonzero_noise_produces_spread(tiny_cfg, small_mesh):
     cfg, m = _model(tiny_cfg, small_mesh, stochastic=True)
     cur, prev, st = _inputs(cfg, small_mesh)
     with torch.no_grad():
-        pred = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=8)
+        pred = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=8, forcing=_forcing(cfg, small_mesh, cur.shape[0], 2))
     spread = pred.std(dim=1).mean().item()
     assert spread > 1e-6, f"ensemble collapsed at init: spread {spread}"
 
@@ -69,7 +78,7 @@ def test_members_are_distinct(tiny_cfg, small_mesh):
     cfg, m = _model(tiny_cfg, small_mesh, stochastic=True)
     cur, prev, st = _inputs(cfg, small_mesh, B=1)
     with torch.no_grad():
-        pred = m.rollout_ensemble(m.seed(cur), st, 1, prev_phys=prev, n_members=4)[0, :, 0]
+        pred = m.rollout_ensemble(m.seed(cur), st, 1, prev_phys=prev, n_members=4, forcing=_forcing(cfg, small_mesh, cur.shape[0], 1))[0, :, 0]
     for i in range(4):
         for j in range(i + 1, 4):
             assert not torch.allclose(pred[i], pred[j], atol=1e-7), f"members {i},{j} identical"
@@ -81,8 +90,8 @@ def test_same_z_gives_same_member(tiny_cfg, small_mesh):
     cur, prev, st = _inputs(cfg, small_mesh, B=1)
     z = torch.randn(1, 2, cfg.model.noise_dim)
     with torch.no_grad():
-        a = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=2, z=z)
-        b = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=2, z=z)
+        a = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=2, z=z, forcing=_forcing(cfg, small_mesh, cur.shape[0], 2))
+        b = m.rollout_ensemble(m.seed(cur), st, 2, prev_phys=prev, n_members=2, z=z, forcing=_forcing(cfg, small_mesh, cur.shape[0], 2))
     assert torch.allclose(a, b, atol=1e-6)
 
 
@@ -121,8 +130,8 @@ def test_deterministic_model_ignores_z(tiny_cfg, small_mesh):
     cfg, m = _model(tiny_cfg, small_mesh, stochastic=False)
     cur, prev, st = _inputs(cfg, small_mesh)
     with torch.no_grad():
-        a = m.forecast_step(m.seed(cur), st, prev, torch.randn(2, cfg.model.noise_dim))
-        b = m.forecast_step(m.seed(cur), st, prev, None)
+        a = m.forecast_step(m.seed(cur), st, prev, torch.randn(2, cfg.model.noise_dim), _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
+        b = m.forecast_step(m.seed(cur), st, prev, None, _forcing(cfg, small_mesh, 2, 1)[:, 0] if cfg.state.solar_forcing else None)
     assert torch.allclose(a, b, atol=1e-7)
 
 
@@ -135,6 +144,6 @@ def test_film_gradients_are_nonzero(tiny_cfg, small_mesh):
     m = WeatherNCA(cfg, MeshPerception(small_mesh))
     torch.nn.init.normal_(m.update.head.weight, std=0.01)
     cur, prev, st = _inputs(cfg, small_mesh)
-    pred = m.rollout_ensemble(m.seed(cur), st, 1, prev_phys=prev, n_members=3)
+    pred = m.rollout_ensemble(m.seed(cur), st, 1, prev_phys=prev, n_members=3, forcing=_forcing(cfg, small_mesh, cur.shape[0], 1))
     pred.pow(2).mean().backward()
     assert m.update.film.weight.grad.abs().max() > 0, "FiLM pathway receives no gradient"

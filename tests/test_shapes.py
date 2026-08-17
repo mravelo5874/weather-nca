@@ -29,7 +29,9 @@ def test_channel_order_is_variable_major(tiny_cfg):
 def test_derived_dimensions(tiny_cfg):
     assert tiny_cfg.c_phys == 5
     assert tiny_cfg.c_state == tiny_cfg.c_phys + tiny_cfg.state.c_hidden
-    assert tiny_cfg.c_cond == tiny_cfg.state.c_static + tiny_cfg.c_phys  # second_order
+    # cond is [static | solar forcing | tendency]
+    assert tiny_cfg.c_cond == tiny_cfg.state.c_static + tiny_cfg.c_forcing + tiny_cfg.c_phys
+    assert tiny_cfg.c_forcing == 3  # cos(zenith), sin(doy), cos(doy)
 
 
 def test_perception_output_width(tiny_cfg, small_mesh):
@@ -47,19 +49,20 @@ def test_perception_identity_block_is_first(tiny_cfg, small_mesh):
 
 
 @pytest.mark.parametrize("kind", ["nca", "control_gnn"])
-def test_rollout_shapes(tiny_cfg, small_mesh, kind):
+def test_rollout_shapes(tiny_cfg, small_mesh, kind, forcing_for):
     cfg = dataclasses.replace(tiny_cfg, model=dataclasses.replace(tiny_cfg.model, kind=kind))
     model = build_model(cfg, small_mesh)
     N = len(small_mesh["v"])
     cur = torch.randn(2, N, cfg.c_phys)
     st = torch.randn(2, N, cfg.state.c_static)
     with torch.no_grad():
-        out = model.rollout(model.seed(cur), st, 3, prev_phys=torch.randn(2, N, cfg.c_phys))
+        out = model.rollout(model.seed(cur), st, 3, prev_phys=torch.randn(2, N, cfg.c_phys),
+                            forcing=forcing_for(cfg, small_mesh, 2, 3))
     assert out.shape == (2, 3, N, cfg.c_phys)
 
 
 @pytest.mark.parametrize("kind", ["nca", "control_gnn"])
-def test_ensemble_rollout_shapes(tiny_cfg, small_mesh, kind):
+def test_ensemble_rollout_shapes(tiny_cfg, small_mesh, kind, forcing_for):
     cfg = dataclasses.replace(
         tiny_cfg, model=dataclasses.replace(tiny_cfg.model, kind=kind, stochastic=True)
     )
@@ -68,11 +71,12 @@ def test_ensemble_rollout_shapes(tiny_cfg, small_mesh, kind):
     cur = torch.randn(2, N, cfg.c_phys)
     with torch.no_grad():
         out = model.rollout_ensemble(model.seed(cur), torch.randn(2, N, cfg.state.c_static),
-                                     3, n_members=5)
+                                     3, n_members=5,
+                                     forcing=forcing_for(cfg, small_mesh, 2, 3))
     assert out.shape == (2, 5, 3, N, cfg.c_phys)
 
 
-def test_ensemble_member_axis_unflattens_correctly(tiny_cfg, small_mesh):
+def test_ensemble_member_axis_unflattens_correctly(tiny_cfg, small_mesh, forcing_for):
     """Members are folded into the batch as [B*M]; `.view(B, M, ...)` must invert that. If the
     two disagreed, member 0 of batch 1 would silently become member 1 of batch 0."""
     cfg = dataclasses.replace(tiny_cfg, model=dataclasses.replace(tiny_cfg.model, stochastic=True))
@@ -81,7 +85,8 @@ def test_ensemble_member_axis_unflattens_correctly(tiny_cfg, small_mesh):
     cur = torch.stack([torch.full((N, cfg.c_phys), float(b)) for b in range(3)])
     with torch.no_grad():
         out = model.rollout_ensemble(model.seed(cur), torch.zeros(3, N, cfg.state.c_static),
-                                     1, n_members=4)
+                                     1, n_members=4,
+                                     forcing=forcing_for(cfg, small_mesh, 3, 1))
     for b in range(3):
         assert torch.allclose(out[b].mean(), torch.tensor(float(b)), atol=1e-3), \
             f"batch element {b} leaked across the member axis"
@@ -98,7 +103,7 @@ def test_seed_zeroes_hidden_channels(tiny_cfg, small_mesh):
 def test_dataset_triple_shapes(small_mesh):
     N, C = len(small_mesh["v"]), 3
     ds = WeatherSeq(np.random.randn(20, N, C).astype(np.float32), n_out=4)
-    prev, cur, tgt = ds[0]
+    prev, cur, tgt, idx = ds[0]
     assert prev.shape == (N, C) and cur.shape == (N, C) and tgt.shape == (4, N, C)
     assert len(ds) == 20 - 4 - 1
 
@@ -106,8 +111,10 @@ def test_dataset_triple_shapes(small_mesh):
 def test_dataset_targets_follow_current():
     """(x_{t-1}, x_t) -> x_{t+1..}: an off-by-one here trains the model on the wrong lead."""
     x = np.arange(10, dtype=np.float32).reshape(10, 1, 1)
-    prev, cur, tgt = WeatherSeq(x, n_out=2)[3]
+    prev, cur, tgt, idx = WeatherSeq(x, n_out=2)[3]
     assert prev.item() == 3 and cur.item() == 4 and tgt.flatten().tolist() == [5, 6]
+    # The index must point at `cur`: the solar forcing for window k is keyed on idx + 1 + k.
+    assert idx == 4
 
 
 def test_dataset_rejects_too_short_a_split():

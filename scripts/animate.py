@@ -18,6 +18,7 @@ Scoring uses the conservative regrid in `mesh/regrid.py`.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from matplotlib import animation  # noqa: E402
 matplotlib.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
 from wnca.config import HOURS_PER_WINDOW, load_config  # noqa: E402
+from wnca.eval.metrics import channel_units  # noqa: E402
 from wnca.mesh.regrid import nearest_grid_index  # noqa: E402
 from wnca.train.checkpoint import latest_checkpoint, load_checkpoint  # noqa: E402
 from wnca.train.phases import setup  # noqa: E402
@@ -46,6 +48,16 @@ ERR_CMAP = "PuOr"
 
 def _grid(nn_idx, vals):
     return np.asarray(vals).reshape(-1)[nn_idx]
+
+
+_UNIT_TEX = {"m2/s2": r"m$^2$/s$^2$", "m/s": "m/s", "K": "K", "log": "log units", "-": ""}
+
+
+def _label(cfg, normalizer, ci, chan):
+    """Axis label with the channel's real unit. Log-transformed channels are marked as such,
+    because those values are log(kg/kg) and calling them physical would be wrong."""
+    u = _UNIT_TEX.get(channel_units(cfg, normalizer)[ci], "")
+    return f"{chan}" + (f"  ({u})" if u else "")
 
 
 def _style(ax, title):
@@ -113,7 +125,7 @@ def mode_rollout(args, cfg, mesh, cache, device, ci, chan, out_dir):
         _imshow(axes[1], _grid(nn_idx, fc_p[0]), lo, hi, TRUTH_CMAP),
         _imshow(axes[2], _grid(nn_idx, err[0]), -emax, emax, ERR_CMAP),
     ]
-    fig.colorbar(ims[1], ax=axes[:2], shrink=0.8, label=f"{chan} (m$^2$/s$^2$)", pad=0.01)
+    fig.colorbar(ims[1], ax=axes[:2], shrink=0.8, label=_label(cfg, norm, ci, chan), pad=0.01)
     fig.colorbar(ims[2], ax=axes[2], shrink=0.8, label="error", pad=0.01)
     sup = fig.suptitle("", fontsize=12)
 
@@ -181,7 +193,7 @@ def mode_compare(args, cfg, mesh, cache, device, ci, chan, out_dir):
         _imshow(axes[2], _grid(nn_idx, b_p[0]), lo, hi, TRUTH_CMAP),
         _imshow(axes[3], _grid(nn_idx, (err_b - err_a)[0]), -emax, emax, "RdYlGn"),
     ]
-    fig.colorbar(ims[2], ax=axes[:3], shrink=0.8, label=f"{chan} (m$^2$/s$^2$)", pad=0.01)
+    fig.colorbar(ims[2], ax=axes[:3], shrink=0.8, label=_label(cfg, norm_a, ci, chan), pad=0.01)
     fig.colorbar(ims[3], ax=axes[3], shrink=0.8, label=f"|err {args.label_b}| − |err {args.label_a}|", pad=0.01)
     sup = fig.suptitle("", fontsize=12)
 
@@ -200,7 +212,10 @@ def mode_compare(args, cfg, mesh, cache, device, ci, chan, out_dir):
                      f"({(k + 1) * HOURS_PER_WINDOW / 24:.2f} days)")
         return ims
 
-    path = out_dir / f"compare_{chan}.mp4"
+    # Include both labels: every comparison used to write compare_<chan>.mp4 and silently
+    # overwrite the previous one.
+    slug = lambda t: re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")
+    path = out_dir / f"compare_{slug(args.label_a)}_vs_{slug(args.label_b)}_{chan}.mp4"
     _save(fig, update, args.windows, path, args.fps)
     return path
 

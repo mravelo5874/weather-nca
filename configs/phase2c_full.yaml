@@ -1,12 +1,66 @@
-# Phase 2c -- multi-variable, full data, capacity sweep. Isolates: combined effect + capacity.
+# Phase 2c -- multi-variable, full 39 years. The fourth cell of the 2x2.
+#
 # GATE: best deterministic checkpoint. This is what phase 3a warm-starts from.
 #
-# Sweep capacity once, early, at fixed data:
-#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=256 model.n_layers=3
-#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=512 model.n_layers=4
-#   wnca train -c configs/phase2c_full.yaml --set model.hidden_dim=768 model.n_layers=4
-# Target 1-5M params, an order of magnitude under DLWP-HPX's 9.8M.
+#                    1 variable          28 variables
+#     2 years        phase 0             phase 2b / 2b-pushforward
+#     39 years       phase 2a            phase 2c        <- this run
+#
+# Its clean control is **phase 2a** (39 yr x 1 var, same test year 2020): only the state
+# changes. Comparison to 2b-pushforward is also informative -- same state, more data -- but
+# that ran on test 2018, so read it with the caveat that the test year shifts results ~0.6%
+# (measured when phase 0 was scored on both years).
+#
+# ---------------------------------------------------------------------------------------
+# Settings carried from what was measured, not from the plan's defaults:
+#
+#   pushforward: true      Cut 360h RMSE by 46% at 2 years and improved 24h by 5.2%. The
+#                          single largest effect found in the milestone. On by default now.
+#   n_substeps: 20         Reverted from 2b's 40. Measured: no benefit, exactly 2.0x the cost.
+#                          The CFL argument that motivated 40 was an offline proxy and the
+#                          direct diagnostic contradicted it.
+#   solar_forcing: true    Worth 19% on 2m temperature at 24h by ablation. Base default now.
+#   amp: true              Measured 1.50-1.55x on an L4 at hidden_dim=512. Inert on Turing,
+#                          so this only pays on the cloud instance. Requires the sparse-op
+#                          fp32 fix -- without it, AMP crashes on step one.
+#   batch_size: 8          Measured: throughput is FLAT in batch size on an L4 (9.6 -> 8.9
+#                          samples/s from B=8 to 32). Larger batches buy nothing here.
+#   hidden_dim: 512        Measured only 1.56x the cost of 256 on an L4, not the 4x that
+#                          hidden_dim^2 implies. The capacity sweep is therefore much less
+#                          compute-critical than the local profile suggested; run 512 directly.
+#
+#   ckpt_windows: 12       RAISED from 8. The 48h selection metric was a poor predictor for
+#                          pushforward -- it finished tied with 2b while the real gains were
+#                          at 120h and beyond, which a 48h rollout barely samples. 12 windows
+#                          (72h) samples further out at ~1.5x the selection cost, which
+#                          ckpt_subsample absorbs.
+# ---------------------------------------------------------------------------------------
 phase: phase2c_full
 
+data:
+  train_years: "1979-2017"
+  val_years: [2018]
+  test_years: [2020]             # matches the WB2 probabilistic leaderboard, and phase 2a
+
+state:
+  solar_forcing: true
+
+model:
+  hidden_dim: 512
+  n_layers: 4
+  n_substeps: 20
+  dt: 0.05
+
 train:
-  epochs: 20
+  # 7,117 batches/epoch. At the measured 837 ms/step on an L4 with AMP that is ~1.7 h/epoch,
+  # so 8 epochs is ~16 h. Phase 2a was still improving ~11%/epoch when cut at 3 epochs on the
+  # same data volume, so 8 is a real training budget rather than a token one.
+  epochs: 8
+  batch_size: 8
+  lr: 1.0e-3
+  warmup_steps: 500              # 500 steps is 7% of one epoch here, unlike the short phases
+  amp: true
+  pushforward: true
+  noise_std: 0.05
+  ckpt_windows: 12
+  ckpt_subsample: 0.25

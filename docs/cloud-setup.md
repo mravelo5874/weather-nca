@@ -179,8 +179,14 @@ done
 
 ```bash
 gcloud compute images list --project=deeplearning-platform-release --format="value(family)" | sort -u
-# pytorch-2-9-cu129-ubuntu-2204-nvidia-580   <- used here
+# pytorch-2-9-cu129-ubuntu-2204-nvidia-580   Ubuntu 22.04, Python 3.10  <- used for 2c
+# pytorch-2-9-cu129-ubuntu-2404-nvidia-580   Ubuntu 24.04, Python 3.12  <- prefer this
 ```
+
+**Prefer the 24.04 image.** The 22.04 one ships Python 3.10.12, which emits a wall of
+`FutureWarning`s from `google.api_core` about its 2026-10-04 end of life. Harmless — those
+libraries are only touched during the cache build, and installed versions keep working — but
+the log noise is why the status commands below filter with `grep -vE 'Warning|warnings.warn'`.
 
 ## Per-run workflow
 

@@ -74,13 +74,21 @@ def _imshow(ax, data, vmin, vmax, cmap):
 
 
 @torch.no_grad()
-def _rollout(model, cfg, cache, start, n_windows, device, n_members=1):
+def _rollout(model, cfg, cache, start, n_windows, device, n_members=1, mesh=None):
     series = cache.split(args_split).array
     prev = torch.from_numpy(np.array(series[start - 1], dtype=np.float32)).unsqueeze(0).to(device)
     cur = torch.from_numpy(np.array(series[start], dtype=np.float32)).unsqueeze(0).to(device)
     st = torch.from_numpy(cache.static).float().to(device).unsqueeze(0)
+
+    forcing = None
+    if cfg.state.solar_forcing:
+        from wnca.data.forcing import SolarForcing
+
+        forcing = SolarForcing(cache.times(args_split), mesh, device).window(
+            torch.tensor([start], device=device), n_windows)
+
     pred = model.rollout_ensemble(model.seed(cur), st, n_windows, prev_phys=prev,
-                                  n_members=n_members)
+                                  n_members=n_members, forcing=forcing)
     return pred.mean(dim=1)[0].cpu().numpy()  # [W, N, C]
 
 
@@ -103,7 +111,7 @@ def _area_rmse(a, b, area):
 
 def mode_rollout(args, cfg, mesh, cache, device, ci, chan, out_dir):
     model = _load(cfg, args.checkpoint, device, mesh)
-    pred = _rollout(model, cfg, cache, args.start, args.windows, device)
+    pred = _rollout(model, cfg, cache, args.start, args.windows, device, mesh=mesh)
     series = cache.split(args.split).array
     norm = cache.normalizer
 
@@ -156,14 +164,14 @@ def mode_compare(args, cfg, mesh, cache, device, ci, chan, out_dir):
     units before anything is compared, which is the only space in which they are commensurable.
     """
     model_a = _load(cfg, args.checkpoint, device, mesh)
-    pred_a = _rollout(model_a, cfg, cache, args.start, args.windows, device)
+    pred_a = _rollout(model_a, cfg, cache, args.start, args.windows, device, mesh=mesh)
     norm_a = cache.normalizer
 
     cfg_b = load_config(args.config_b or args.config,
                         overrides={"data": {"test_years": list(cfg.data.test_years)}})
     _, cache_b, _, _, _ = setup(cfg_b, device, verbose=False)
     model_b = _load(cfg_b, args.checkpoint_b, device, mesh)
-    pred_b = _rollout(model_b, cfg_b, cache_b, args.start, args.windows, device)
+    pred_b = _rollout(model_b, cfg_b, cache_b, args.start, args.windows, device, mesh=mesh)
     norm_b = cache_b.normalizer
 
     keys_b = [c.key for c in cfg_b.variables.channels()]
@@ -223,7 +231,7 @@ def mode_compare(args, cfg, mesh, cache, device, ci, chan, out_dir):
 def mode_spectrum(args, cfg, mesh, cache, device, ci, chan, out_dir):
     """Map + zonal power spectrum + error curve. Blurring is easier to see than to read off a table."""
     model = _load(cfg, args.checkpoint, device, mesh)
-    pred = _rollout(model, cfg, cache, args.start, args.windows, device)
+    pred = _rollout(model, cfg, cache, args.start, args.windows, device, mesh=mesh)
     series = cache.split(args.split).array
     norm = cache.normalizer
     nn_idx, glat, _ = nearest_grid_index(mesh)

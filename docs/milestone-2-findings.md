@@ -3,7 +3,7 @@
 Recorded as phases complete. Everything here is measured on the local GTX 1660 Ti (6 GB) unless
 stated otherwise; re-measure on the cloud instance before budgeting.
 
-Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ (all three gates failed) · 2c–5 not started.**
+Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ (best model so far) · 2c–5 not started.**
 
 ---
 
@@ -265,6 +265,82 @@ benefit.
 
 ---
 
+## 2b-pf. Pushforward fixes the long-lead divergence, and breaks exit criterion 5
+
+**Best forecasts at every lead from 12 h out**, test 2018, identical splits and eval settings:
+
+| lead | phase 0 | 2b | 2b′ | **pushforward** |
+|---|---|---|---|---|
+| 6 h | 110.2 | **106.3** | 121.2 | 152.4 |
+| 12 h | 169.5 | 158.0 | 178.8 | **167.9** |
+| 24 h | 329.7 | 297.6 | 338.8 | **282.1** |
+| 48 h | 639.1 | 624.0 | 684.4 | **531.0** |
+| 72 h | 881.1 | 934.1 | 978.4 | **755.6** |
+| 120 h | 1231.8 | 1443.7 | 1383.9 | **1085.1** |
+| 168 h | 1493.3 | 1862.0 | 1677.4 | **1308.7** |
+| 360 h | 2208.5 | 3450.6 | 2591.5 | **1860.5** |
+
+At 15 days: **1.74× climatology against 2b's 3.23×**. The long-lead divergence is substantially
+fixed, and the result beats even single-variable phase 0 (2.06×).
+
+**Gate 4 inverted.** Pushforward was expected to cost short-lead accuracy; 24 h *improved* 5.2%.
+The only regression is **6 h (+43%)**, which is the lead where training exclusively from
+self-generated states should hurt most — the model never sees a clean analysis during training.
+
+**Two epochs' worth of caution on the selection metric:** it ended at 0.14343 against 2b's
+0.14215, essentially tied, and was behind at epochs 4–5. The selection metric is a 48 h rollout;
+the gains here are concentrated at 120 h and beyond, which it barely samples. It was a poor
+predictor of the thing that mattered, which is worth remembering when choosing 2c's.
+
+### 2b-pf.1 Perturbation growth got worse while forecasts got better
+
+Directly contrary to the prediction that motivated the run. Sustained growth **×1.139** against
+2b's ×1.062, worst in the v-winds (×1.157 at 500 hPa), 28/28 channels above threshold.
+
+As error-doubling time:
+
+| run | growth / 6 h | doubling | vs atmosphere (1.5–2.5 d) |
+|---|---|---|---|
+| phase 0 | 1.033 | 5.34 d | far too slow |
+| 2b | 1.062 | 2.88 d | too slow |
+| 2b′ | 1.083 | 2.17 d | in range |
+| **pushforward** | **1.139** | **1.33 d** | slightly too fast |
+
+**The two metrics measure different things and have decoupled.** `perturbation_growth` is
+sensitivity to initial conditions — a Lyapunov exponent. RMSE is total error. 2b's long-lead
+error was dominated by **systematic drift into unphysical states** (3.2× climatology is
+divergence, not graceful decay toward it). Pushforward removed the drift while making the
+dynamics genuinely more chaotic. A real weather model should be chaotic; what it should not do
+is drift.
+
+**Exit criterion 5's ≤1.05 threshold is therefore measuring the wrong thing, and this is no
+longer a hypothesis.** The model with the best forecasts at every meaningful lead scores worst
+on it. Applied literally the criterion selects phase 0 — the most over-damped and least
+accurate model in the ladder. It was inherited from a weak single-variable model where any
+growth really was numerical.
+
+**Proposed amendment**, for the plan rather than for this document to decide:
+
+> Replace "perturbation_growth ≤ ~1.05 per window" with two clauses:
+> (a) **bounded**: long-lead RMSE saturates near climatology rather than exceeding it by a
+>     growing factor; and
+> (b) **physical**: error-doubling time in roughly 1.5–3 days.
+>
+> Pushforward passes (a) far better than anything else tried and slightly overshoots (b).
+> Phase 0 passes the old criterion and fails both of these.
+
+### 2b-pf.2 What is still broken
+
+`2m_temperature` remains **−30% skill at 24 h** (from 2b's −48%). Solar forcing helps and is
+not sufficient. Two years of data, 28 channels competing in the loss, and no representation of
+surface energy balance. Still open.
+
+`specific_humidity_850` turns negative by 72 h (+9% at 72 h, −11% at 120 h), the weakest of the
+atmospheric variables — consistent with moisture being the least constrained by the geostrophic
+coupling that drives the rest.
+
+---
+
 ## 3. Bugs found, and what they cost
 
 Recorded because each was silent — no exception, no NaN, plausible-looking output.
@@ -363,9 +439,10 @@ the sub-step count would also double the effective integration length per window
 2. **Is 40 sub-steps enough, or is this the first mitigation of three?** The plan's order is
    more sub-steps → larger perception radius → semi-Lagrangian pre-advection. The advection
    sweep had not plateaued at 80, so 40 may only halve the problem.
-3. **How much of the long-lead divergence is CFL and how much is single-step training?**
-   `pushforward` is implemented and now correct but has never been run. It is the designated
-   mechanism for teaching the rule to contract error from states it actually produces.
+3. **Answered.** Single-step training, not CFL. Pushforward cut 360 h RMSE by 46%.
+   Open follow-up: pushforward is on by default for 2c onward, and the 6 h regression (+43%)
+   suggests a mixed objective — some clean-state steps alongside self-generated ones — may
+   recover the short lead without losing the long one. Untested.
 4. **What is the converged 2a number?** Still falling ~11%/epoch when the run was cut, so the
    data-volume effect is understated.
 5. **Does exit criterion 5's ≤1.05 threshold survive contact with a sharp model?** See §2.3.

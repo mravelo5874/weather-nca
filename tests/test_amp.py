@@ -15,6 +15,7 @@ update MLP is ~80% of a sub-step and is dense, so it still gets the tensor cores
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
@@ -121,3 +122,67 @@ def test_amp_training_step_updates_weights(tiny_cfg, small_mesh, tiny_cache):
     out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
     assert out["skipped"] == 0
     assert not torch.equal(before, model.update.head.weight), "no weight update under AMP"
+
+
+@CUDA
+def test_pushforward_under_amp_still_builds_a_graph(tiny_cfg, small_mesh, tiny_cache):
+    """Pushforward and AMP each worked alone and broke together.
+
+    Running a module under `no_grad` INSIDE an autocast region populates autocast's weight
+    cache with fp16 copies that do not track gradients. The subsequent grad-enabled forward
+    reuses those cached weights, so its output has no grad_fn and backward dies with
+    "element 0 of tensors does not require grad and does not have a grad_fn".
+
+    This reached a cloud instance and killed phase 2c on its first step -- the feature matrix
+    was tested one axis at a time, and the interaction was the thing that mattered.
+    """
+    import dataclasses
+
+    from wnca.data.dataset import make_loader
+    from wnca.train.loop import Trainer
+
+    cfg = dataclasses.replace(
+        tiny_cfg,
+        train=dataclasses.replace(tiny_cfg.train, amp=True, pushforward=True),
+    )
+    torch.manual_seed(0)
+    model = build_model(cfg, small_mesh, device="cuda")
+    torch.nn.init.normal_(model.update.head.weight, std=0.01)
+    tr = Trainer(cfg, model, small_mesh, tiny_cache, device="cuda")
+
+    before = model.update.head.weight.detach().clone()
+    # n_out+1 targets: pushforward consumes one window before supervision starts.
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=2, shuffle=False), 1, True, 10)
+
+    assert out["skipped"] == 0, "batches were skipped -- loss went non-finite under AMP"
+    assert not torch.equal(before, model.update.head.weight), "no weight update"
+
+
+@CUDA
+def test_every_training_feature_combination_runs(tiny_cfg, small_mesh, tiny_cache):
+    """The feature matrix, exercised as a matrix.
+
+    amp x pushforward x solar_forcing is 8 combinations; testing them one axis at a time missed
+    the one that broke. Cheap insurance against the next interaction.
+    """
+    import dataclasses
+    import itertools
+
+    from wnca.data.dataset import make_loader
+    from wnca.train.loop import Trainer
+
+    for amp, pf, solar in itertools.product((False, True), repeat=3):
+        cfg = dataclasses.replace(
+            tiny_cfg,
+            state=dataclasses.replace(tiny_cfg.state, solar_forcing=solar),
+            train=dataclasses.replace(tiny_cfg.train, amp=amp, pushforward=pf),
+        )
+        torch.manual_seed(0)
+        model = build_model(cfg, small_mesh, device="cuda")
+        torch.nn.init.normal_(model.update.head.weight, std=0.01)
+        tr = Trainer(cfg, model, small_mesh, tiny_cache, device="cuda")
+        n_out = 2 if pf else 1
+        out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=n_out, shuffle=False),
+                           1, True, 10)
+        assert out["skipped"] == 0, f"amp={amp} pushforward={pf} solar={solar}: batches skipped"
+        assert np.isfinite(out["loss"]), f"amp={amp} pushforward={pf} solar={solar}: non-finite"

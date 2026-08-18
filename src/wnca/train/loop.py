@@ -138,7 +138,12 @@ class Trainer:
         # state the model actually produces. Distinct mechanism from the input noise above.
         offset = 0
         if train and cfg.train.pushforward:
-            with torch.no_grad():
+            # `enabled=False` is load-bearing, not tidiness. Running a module under no_grad
+            # INSIDE an autocast region populates autocast's weight cache with fp16 copies that
+            # do not track gradients; the tracked forward then reuses them and its output has no
+            # grad_fn, so backward dies with "element 0 of tensors does not require grad". The
+            # pushforward step is no-grad anyway, so fp32 here costs nothing.
+            with torch.no_grad(), torch.autocast(self.amp_device, enabled=False):
                 # The pushforward window is window 0, so it takes the unshifted forcing.
                 f0 = forcing[:, 0] if forcing is not None else None
                 stepped = self.model.forecast_step(state, st, prev, None, f0)

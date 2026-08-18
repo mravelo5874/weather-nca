@@ -309,6 +309,25 @@ Recorded because each was silent — no exception, no NaN, plausible-looking out
 | 250 hPa jet max in data | 102 m/s | vs 30 m/s in the M1 CFL sweep |
 | unit test suite | 133 tests, ~11 s | budget is 60 s |
 
+**`torch.compile` does not help here, and cannot be fully tested here.**
+
+| backend | result |
+|---|---|
+| `inductor` (default) | **unavailable on Windows** — requires Triton, which is not installed and is historically patchy on this platform |
+| `cudagraphs` | compiles, but **×1.03** — indistinguishable from noise |
+
+The motivating hypothesis was that 20 sequential small ops per forecast step would be
+launch-bound, which is CUDA graphs' best case. The earlier profile already contradicted that
+and it was not noticed: the update MLP is ~80% of a sub-step and consists of four matmuls on
+`[81936, 512]`, which are large and **compute-bound**, so there is little launch overhead to
+recover. Measured while the GPU was shared with a game, so absolute times are not
+decision-grade; the arms were interleaved rather than blocked so the ratio is still meaningful,
+and no plausible contention artefact hides a 2× win.
+
+**This does not rule out `torch.compile` on the cloud instance.** `inductor` is available on
+Linux and does operator fusion rather than only graph capture, which targets memory traffic
+rather than launch overhead. Untested, and free to test there.
+
 **Things measured and rejected:**
 
 - Fusing the three perception operators into one `[3N, N]` sparse matmul: **slower** (33 ms vs

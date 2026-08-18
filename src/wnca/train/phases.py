@@ -91,7 +91,10 @@ def setup(cfg: Config, device: str | None = None, verbose: bool = True):
         film = getattr(model, "film_parameters", None) or getattr(model.update, "film_parameters", None)
         n_film = sum(p.numel() for p in film()) if film else 0
         note = f" ({total - n_film:,} + {n_film:,} FiLM, inactive)" if not cfg.model.stochastic and n_film else ""
-        print(f"model: {cfg.model.kind}, {total:,} params{note}, device {device}")
+        amp_note = ""
+        if cfg.train.amp and device == "cuda":
+            amp_note = f", amp={'bf16' if torch.cuda.get_device_capability()[0] >= 8 else 'fp16'}"
+        print(f"model: {cfg.model.kind}, {total:,} params{note}, device {device}{amp_note}")
     return mesh, cache, model, bands, device
 
 

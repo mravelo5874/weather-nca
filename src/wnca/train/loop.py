@@ -85,11 +85,27 @@ class Trainer:
         self.step = 0
         self.best = float("inf")
 
-        # AMP matters on the cloud spot GPUs, not on a 1660 Ti: Turing has no tensor cores, so
+        # AMP matters on the cloud GPUs, not on a 1660 Ti: Turing has no tensor cores, so
         # locally this is roughly a no-op. Autocast has no mps backend, hence the fallback.
         self.amp_device = device if device in ("cuda", "cpu") else "cpu"
         self.use_amp = cfg.train.amp and device == "cuda"
-        self.scaler = torch.amp.GradScaler(device) if self.use_amp else None
+
+        # **bf16 over fp16 whenever the card supports it.** Mesh perception spans a ~1000x
+        # dynamic range -- measured at n_sub=5, the Laplacian block reaches 8000 while the
+        # identity block is 7.2 -- because the cotangent Laplacian scales as 1/h^2. fp16 tops
+        # out at 65504, so that leaves under 10x headroom and the forward overflows once the
+        # weights grow. Phase 2c died this way partway through epoch 1: 143 non-finite batches.
+        # bf16 has fp32's exponent range, runs at the same tensor-core speed on Ampere and
+        # later, and needs no loss scaling.
+        # Compute capability >= 8.0 (Ampere) is where bf16 is NATIVE.
+        # `torch.cuda.is_bf16_supported()` also returns True for emulated support on Turing,
+        # which would be correct but slow, so check the capability directly.
+        self.amp_dtype = torch.float16
+        if self.use_amp and torch.cuda.get_device_capability()[0] >= 8:
+            self.amp_dtype = torch.bfloat16
+        # GradScaler exists to manage fp16 overflow; bf16 does not need it.
+        self.scaler = (torch.amp.GradScaler(device)
+                       if self.use_amp and self.amp_dtype is torch.float16 else None)
         _install_sigterm_handler()
 
     # ---- schedule ----
@@ -213,7 +229,7 @@ class Trainer:
                           cur.to(self.device, non_blocking=True),
                           tgt.to(self.device, non_blocking=True), idx)
             with torch.set_grad_enabled(train):
-                with torch.autocast(self.amp_device, enabled=self.use_amp):
+                with torch.autocast(self.amp_device, dtype=self.amp_dtype, enabled=self.use_amp):
                     pred, ovf, offset = self._forward(batch, n_out, M, train)
                 # The loss is computed in fp32: CRPS differences at small M are exactly the
                 # quantity fp16 rounds away, and under-dispersion would be the silent result.

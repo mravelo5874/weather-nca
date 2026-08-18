@@ -116,7 +116,11 @@ def test_amp_training_step_updates_weights(tiny_cfg, small_mesh, tiny_cache):
     model = build_model(cfg, small_mesh, device="cuda")
     torch.nn.init.normal_(model.update.head.weight, std=0.01)
     tr = Trainer(cfg, model, small_mesh, tiny_cache, device="cuda")
-    assert tr.scaler is not None, "GradScaler was not created despite train.amp"
+    # GradScaler exists only to manage fp16 overflow; bf16 has fp32's exponent range and
+    # needs none, so the scaler is deliberately absent on Ampere and later.
+    native_bf16 = torch.cuda.get_device_capability()[0] >= 8
+    assert (tr.scaler is None) == native_bf16, f"scaler={tr.scaler} for dtype={tr.amp_dtype}"
+    assert tr.amp_dtype is (torch.bfloat16 if native_bf16 else torch.float16)
 
     before = model.update.head.weight.detach().clone()
     out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)

@@ -198,3 +198,55 @@ def test_subset_never_empty():
     from wnca.data.dataset import WeatherSeq, evenly_spaced_subset
     ds = WeatherSeq(np.zeros((30, 5, 1), dtype=np.float32), n_out=2)
     assert len(evenly_spaced_subset(ds, 0.001)) >= 1
+
+
+# --- divergence handling ---------------------------------------------------------------
+
+def test_non_finite_batch_is_skipped_not_trained_on(tiny_cfg, small_mesh, tiny_cache, monkeypatch):
+    """Phase 2b' diverged mid-epoch. A non-finite loss must not reach the optimizer, and the
+    weights must be untouched by that batch."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+
+    # Only the first batch is poisoned: an isolated outlier, not a diverged model. Freeze the
+    # learning rate at zero so any weight change can only have come from that batch.
+    real_loss = tr._loss
+    calls = {"n": 0}
+
+    def flaky(pred, tgt, ovf):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return torch.tensor(float("inf")), float("inf"), {}
+        return real_loss(pred, tgt, ovf)
+
+    monkeypatch.setattr(tr, "_loss", flaky)
+    monkeypatch.setattr(tr, "_lr_at", lambda step, total: 0.0)
+    before = [p.detach().clone() for p in tr.model.parameters()]
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+
+    assert out["skipped"] == 1, f"expected exactly one skipped batch, got {out['skipped']}"
+    assert np.isfinite(out["loss"]), "one bad batch poisoned the epoch average"
+    for a, b in zip(before, tr.model.parameters()):
+        assert torch.equal(a, b), "weights changed despite a zero learning rate"
+
+
+def test_sustained_divergence_raises_rather_than_grinding_on(tiny_cfg, small_mesh, tiny_cache,
+                                                             monkeypatch):
+    """Skipping is right for an outlier batch and wrong for a diverged model -- an epoch that
+    silently skipped everything would burn hours and report a meaningless metric."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    monkeypatch.setattr(tr, "_loss",
+                        lambda p, t, o: (torch.tensor(float("nan")), float("nan"), {}))
+    with pytest.raises(RuntimeError, match="diverged"):
+        tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+
+
+def test_healthy_epoch_reports_no_skips(tiny_cfg, small_mesh, tiny_cache):
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+    assert out["skipped"] == 0 and np.isfinite(out["loss"])

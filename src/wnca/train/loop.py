@@ -200,7 +200,7 @@ class Trainer:
         cfg = self.cfg
         self.split = split  # selects the right solar-forcing table
         self.model.train(train)
-        acc, nb = 0.0, 0
+        acc, nb, skipped = 0.0, 0, 0
         M = cfg.ensemble.m_train if train else cfg.ensemble.m_val
 
         for prev, cur, tgt, idx in loader:
@@ -213,6 +213,19 @@ class Trainer:
                 # The loss is computed in fp32: CRPS differences at small M are exactly the
                 # quantity fp16 rounds away, and under-dispersion would be the silent result.
                 obj, clean, _ = self._loss(pred.float(), batch.tgt[:, offset:], ovf.float())
+
+            # A non-finite loss makes the whole backward pass non-finite, so skip the batch
+            # before it can touch the optimizer. Guarding only the gradient norm (as before)
+            # works, but wastes a backward pass and hides how often it is happening.
+            if not np.isfinite(clean):
+                skipped += 1
+                if skipped > max(10, 0.02 * len(loader)):
+                    raise RuntimeError(
+                        f"{skipped} non-finite batches this epoch -- the model has diverged, "
+                        "not hit an outlier. Resume from the last good checkpoint at a lower "
+                        "learning rate (wnca train --resume auto --set train.lr=...)."
+                    )
+                continue
 
             if train:
                 self._set_lr(self._lr_at(self.step, total_steps))
@@ -235,7 +248,9 @@ class Trainer:
             nb += 1
             if _PREEMPTED["flag"]:
                 break
-        return {"loss": acc / max(nb, 1), "batches": nb}
+        if skipped:
+            print(f"  skipped {skipped}/{len(loader)} non-finite batches")
+        return {"loss": acc / max(nb, 1), "batches": nb, "skipped": skipped}
 
     @torch.no_grad()
     def selection_metric(self, loader) -> float:  # noqa: D401

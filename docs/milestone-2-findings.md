@@ -3,7 +3,7 @@
 Recorded as phases complete. Everything here is measured on the local GTX 1660 Ti (6 GB) unless
 stated otherwise; re-measure on the cloud instance before budgeting.
 
-Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ pending · 2c–5 not started.**
+Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ (all three gates failed) · 2c–5 not started.**
 
 ---
 
@@ -195,6 +195,76 @@ the question will not stay academic.
 
 ---
 
+## 2b′. The fixes did not work, and one of them was justified by a bad argument
+
+**All three gates failed, and two regressed.** Against phase 2b on identical splits:
+
+| gate | 2b | 2b′ | verdict |
+|---|---|---|---|
+| sustained perturbation growth ≤1.05 | ×1.062 (27/28 channels over) | **×1.083 (28/28 over)** | ❌ worse |
+| 2m temperature skill at +24 h | −48% | **−62%** | ❌ worse |
+| long-lead RMSE bounded | 3.2× climatology at 360 h | **2.4×** | ❌ still diverging, but improved |
+
+24 h z500 also regressed: 338.8 against 2b's 297.6 (+14%).
+
+### The run is confounded, and that is my fault
+
+2b′ **diverged in epoch 3** — loss to `inf`, gradients to NaN. I had set `warmup_steps: 0` to
+match 2b, which was wrong for a stack twice as deep. Resuming at half the learning rate fixed
+the instability, but left the model **undertrained**: final selection 0.1817 against 2b's
+0.1422, a 28% gap, with the regression roughly uniform (+14% z500, +12% 2t). So the failures
+cannot be cleanly attributed to the two changes.
+
+Recorded as a finding in its own right: **sub-step depth and the LR schedule are coupled.**
+Doubling `n_substeps` doubles the effective depth of the residual stack and needs a gentler
+schedule; the divergence was not inherent to the fix.
+
+### What *is* established
+
+**Solar forcing is correct and the model uses it.** Verified on real ERA5 timestamps — at
+44.7°N, 0°E in January, cos(zenith) is 0.381 at 12Z and 0.000 at 00/06/18Z, which is right for
+winter mid-latitudes. And the ablation is unambiguous:
+
+| lead | 2t RMSE, real forcing | forcing zeroed |
+|---|---|---|
+| 6 h | 2.230 | 2.397 |
+| 12 h | 2.895 | 3.195 |
+| 18 h | 3.042 | 3.532 |
+| 24 h | **3.273** | **4.019** |
+
+The pathway is worth 19% on 2t at 24 h. It did not overcome the undertraining, but the
+mechanism works and should be kept.
+
+### 2b′.1 The CFL argument for 40 sub-steps was a clever measurement, and it misfired
+
+More sub-steps did **not** slow error growth — it rose (×1.062 → ×1.083), with the v-winds
+worst (×1.094 → ×1.121 at 300 hPa). Undertraining confounds the magnitude, but the *direction*
+is wrong and no amount of undertraining was predicted to make it worse.
+
+The argument for the change was an offline advection sweep showing a fixed linear operator
+overshooting 5.3% per window at jet speed with 20 sub-steps. That measurement is real, but it
+does not govern the trained model, and the error in the reasoning is now clear:
+
+> `dt × n_substeps` is held at 1.0, so the model learns the **total per-window map**. Changing
+> how finely that map is discretized does not change its amplification, unless the amplification
+> came from discretization error. The learned operator is not the fixed advection operator the
+> sweep measured.
+
+This is exactly the failure mode CLAUDE.md warns about — an offline proxy used to justify a
+change to the learned system, contradicted by the direct measurement. `perturbation_growth` was
+right again.
+
+**Consequence: the long-lead instability is a training-objective problem, not a numerical one.**
+Single-step MSE never penalizes multi-window error growth, so the model is free to learn an
+amplifying map. The lever is `train.pushforward` — implemented, corrected, and never run — which
+trains the rule to contract error from states it actually produces.
+
+**Practical consequence: revert `n_substeps` to 20 and halve every remaining compute estimate.**
+40 sub-steps costs exactly 2.0× (measured: 7,458 ms/batch against 3,722) and has no measured
+benefit.
+
+---
+
 ## 3. Bugs found, and what they cost
 
 Recorded because each was silent — no exception, no NaN, plausible-looking output.
@@ -213,7 +283,11 @@ Recorded because each was silent — no exception, no NaN, plausible-looking out
    sustained rate was ×1.033. The summary excluded only window 1 while the settling transient
    ran 4 windows — exactly what M1's own findings warn about ("read the per-window ratios, not
    a geometric mean"). Now the transient and the sustained rate are reported separately.
-4. **Comparability slips.** Two evaluations differed only in `eval.max_windows` (28 vs 60),
+4. **Mid-training divergence with no recovery path.** Loss went non-finite only at the gradient
+   check, after a wasted backward pass. Now a non-finite loss skips the batch before the
+   optimizer sees it, and sustained divergence (>2% of an epoch) raises with an actionable
+   message instead of silently skipping everything and reporting a meaningless metric.
+5. **Comparability slips.** Two evaluations differed only in `eval.max_windows` (28 vs 60),
    which shifts the start-time selection and moved persistence by 0.7%. Baselines that *should*
    be identical are the cheapest possible check that two runs are comparable — persistence
    matching to the digit is what validated both the phase 0 port and the 2a normalizer.

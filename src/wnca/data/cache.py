@@ -27,6 +27,15 @@ CHUNK_STEPS = 256
 SPLITS = ("train", "val", "test")
 
 
+def _split_seed(split: str) -> int:
+    """Stable per-split seed for synthetic data.
+
+    Deliberately not `hash()`: string hashing is salted per process, so the same split would
+    seed differently across runs and a rebuilt cache would silently disagree with the original.
+    """
+    return int(hashlib.sha256(split.encode()).hexdigest()[:8], 16)
+
+
 def cache_tag(cfg: Config) -> str:
     """Identity of a cache: anything that changes the bytes on disk."""
     payload = {
@@ -196,7 +205,10 @@ def build_cache(cfg: Config, mesh: dict[str, np.ndarray], force: bool = False,
                 if verbose:
                     print(f"  {split}: {done}/{T} timesteps", end="\r", flush=True)
         else:
-            arr[:] = era5_mod.make_synthetic(cfg, mesh, T, seed=hash(split) % 2**31).astype(dtype)
+            # NOT hash(): Python salts string hashing per process (PYTHONHASHSEED), so a
+            # synthetic cache rebuilt in a different process would hold DIFFERENT data under
+            # the same cache tag -- silently, since the tag does not cover the seed.
+            arr[:] = era5_mod.make_synthetic(cfg, mesh, T, seed=_split_seed(split)).astype(dtype)
             arr.flush()
             man["progress"][split] = T
             _write_manifest(root, man)

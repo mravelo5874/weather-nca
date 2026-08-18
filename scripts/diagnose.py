@@ -390,6 +390,9 @@ def main(argv=None) -> int:
                     help="comma-separated: " + ",".join(STAGES) + ", or 'all'")
     ap.add_argument("--steps", type=int, default=150, help="steps per LR in the sweep")
     ap.add_argument("--lrs", default="1e-3,5e-4,3e-4,1e-4")
+    ap.add_argument("--amp", choices=("on", "off"), default=None,
+                    help="override train.amp for the lr sweep, to compare precisions at a "
+                         "learning rate that is known to be stable")
     ap.add_argument("--checkpoint", default=None,
                     help="probe a trained model rather than a stand-in init (substeps stage)")
     ap.add_argument("--out", default="diagnosis.json")
@@ -402,12 +405,18 @@ def main(argv=None) -> int:
         return 2
 
     cfg = load_config(args.config)
+    if args.amp is not None:
+        cfg = dataclasses.replace(
+            cfg, train=dataclasses.replace(cfg.train, amp=(args.amp == "on")))
     t0 = time.time()
     mesh, cache, _, _, device = setup(cfg, verbose=False)
     ctx = {"mesh": mesh, "cache": cache, "device": device, "checkpoint": args.checkpoint}
+    amp_lbl = "off"
+    if cfg.train.amp and device == "cuda":
+        amp_lbl = "bf16" if torch.cuda.get_device_capability()[0] >= 8 else "fp16"
     print(f"config {args.config} | {cfg.c_phys} channels | n_sub {cfg.mesh.n_sub} | "
           f"hidden {cfg.model.hidden_dim} | n_substeps {cfg.model.n_substeps} | "
-          f"pushforward {cfg.train.pushforward} | device {device}")
+          f"pushforward {cfg.train.pushforward} | device {device} | amp {amp_lbl}")
 
     report = {}
     for n in names:

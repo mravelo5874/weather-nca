@@ -172,3 +172,35 @@ def test_double_normalization_would_be_detectable(synth_cfg, small_mesh):
     x = _read(synth_cfg, "train")
     twice = norm.encode(x)
     assert not np.allclose(twice, x, atol=1e-3), "normalization appears idempotent -- it is not"
+
+
+def test_synthetic_seed_is_stable_across_processes():
+    """`hash()` is salted per process (PYTHONHASHSEED), so seeding synthetic data with it means
+    a cache rebuilt in a different process holds DIFFERENT data under the SAME cache tag --
+    silently, because the tag does not cover the seed.
+
+    Checked by running the seed function in a subprocess rather than trusting the source.
+    """
+    import subprocess
+    import sys
+
+    from wnca.data.cache import _split_seed
+
+    code = "from wnca.data.cache import _split_seed; print(_split_seed('train'))"
+    a = int(subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, check=True).stdout)
+    b = int(subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, check=True).stdout)
+    assert a == b == _split_seed("train"), "synthetic seed differs across processes"
+    assert _split_seed("train") != _split_seed("val"), "splits must not share a seed"
+
+
+def test_builtin_hash_really_is_unstable():
+    """The control for the test above: if `hash()` were stable, the fix would be pointless."""
+    import subprocess
+    import sys
+
+    code = "print(hash('train'))"
+    vals = {subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, check=True).stdout.strip() for _ in range(4)}
+    assert len(vals) > 1, "hash() appears stable here -- PYTHONHASHSEED may be pinned"

@@ -19,6 +19,9 @@ dependencies = [
     "pyyaml",
     "matplotlib",
     "wandb",
+    # scripts/animate.py imports this at module level to render MP4s; ffmpeg is not otherwise
+    # on PATH on a fresh machine.
+    "imageio-ffmpeg",
 ]
 
 [project.optional-dependencies]

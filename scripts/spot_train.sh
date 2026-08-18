@@ -28,6 +28,16 @@ LR_DECAY_ON_CRASH="${LR_DECAY_ON_CRASH:-0.5}"
 
 mkdir -p "$RUN_DIR"
 
+# The GCP deep-learning images ship a setuptools older than PEP 660, so `pip install -e` fails
+# with "build backend is missing the 'build_editable' hook" -- and every later step then runs
+# without the package. Upgrade first, fall back to a non-editable install, and verify.
+if ! python3 -c "import wnca" 2>/dev/null; then
+  echo "[spot] installing wnca"
+  pip install -q --upgrade pip setuptools wheel
+  pip install -q -e ".[dev]" || pip install -q ".[dev]"
+  python3 -c "import wnca" || { echo "[spot] INSTALL FAILED"; exit 1; }
+fi
+
 # Pull any prior state back down first: on a fresh VM this is what makes resume possible.
 if [[ -n "$GCS_PREFIX" ]]; then
   echo "[spot] syncing prior state from $GCS_PREFIX"

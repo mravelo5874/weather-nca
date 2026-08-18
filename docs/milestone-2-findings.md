@@ -385,7 +385,30 @@ Recorded because each was silent — no exception, no NaN, plausible-looking out
 | 250 hPa jet max in data | 102 m/s | vs 30 m/s in the M1 CFL sweep |
 | unit test suite | 133 tests, ~11 s | budget is 60 s |
 
-**`torch.compile` does not help here, and cannot be fully tested here.**
+**Cloud measurements (NVIDIA L4, g2-standard-8, 2026-08-18).** 144/144 tests pass on Linux —
+the first execution outside Windows.
+
+| | ms/step | vs local |
+|---|---|---|
+| 1660 Ti, fp32 | 3,722 | 1.0× |
+| L4, fp32 | 1,294 | 2.9× |
+| L4, AMP | 837 | **4.4×** |
+
+The earlier "15–25×" extrapolation was **wrong by about 5×**. AMP is worth 1.50–1.55× at
+`hidden_dim=512` — its first measured speedup anywhere in the project, and only possible
+because of the sparse-operator fp32 fix.
+
+Three results that close off avenues: **throughput is flat in batch size** (9.6 → 8.9
+samples/s from B=8 to 32), so memory headroom is not a lever and 23 GB is over-provisioned for
+a 5 GB peak; **`hidden_dim` 512 costs only 1.56× over 256**, not the 4× that `hidden_dim²`
+implies; and **GCS reads at 35 MB/s from a non-colocated region**, so the 65 GB cache is ~0.5 h
+of transfer and region-matching matters less than assumed. Capacity, not bandwidth, is the
+constraint — `nvidia-l4` was stocked out in all three `us-central1` zones.
+
+Remaining milestone at these rates: **~54 GPU-hours, ~$40** for 2c + 2d + 3a + 3b, against ~10
+days locally.
+
+**`torch.compile` does not help, on either platform.**
 
 | backend | result |
 |---|---|
@@ -400,9 +423,9 @@ recover. Measured while the GPU was shared with a game, so absolute times are no
 decision-grade; the arms were interleaved rather than blocked so the ratio is still meaningful,
 and no plausible contention artefact hides a 2× win.
 
-**This does not rule out `torch.compile` on the cloud instance.** `inductor` is available on
-Linux and does operator fusion rather than only graph capture, which targets memory traffic
-rather than launch overhead. Untested, and free to test there.
+**Confirmed on the cloud instance: inductor gives ×0.98** — no gain, with triton present and
+working. The workload is compute-bound rather than launch-bound, exactly as the local
+`cudagraphs` result implied. Closed; stop pursuing it.
 
 **Things measured and rejected:**
 

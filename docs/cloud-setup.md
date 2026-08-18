@@ -120,24 +120,67 @@ cross-region -- try `us-east1` or `us-west1` before committing to a 65 GB build.
 
 ---
 
-## Choosing a machine
+## Choosing a machine — measured on an L4, 2026-08-18
 
-Driven by what was measured, not by what looks impressive:
+Everything below is measured, not extrapolated. The earlier "15–25× faster than the local
+1660 Ti" guess was **wrong by about 5×**.
 
-- **Peak GPU memory is 2.49 GB** across every M2 configuration tried. An 80 GB card is wasted
-  money. We are buying throughput, not capacity.
-- **~80% of a sub-step is the update MLP**, scaling with `hidden_dim²`. Large dense matmuls,
-  which is what tensor cores are for.
-- **Turing (the local 1660 Ti) has no tensor cores**, so `train.amp` is inert locally. On
-  Ampere or newer it is a straight 2–3×, and it is already wired up — just set `train.amp: true`.
-- Memory being free means **a much larger `batch_size`** is available on a cloud card, which
-  also improves the matmul shapes. Worth sweeping once on the instance.
+**L4 (g2-standard-8) against the local GTX 1660 Ti**, 28 channels, `hidden_dim=512`, B=8,
+20 sub-steps, one forecast step forward+backward:
 
-A single A100 40 GB, or a smaller Ampere card, is the sensible starting point. **Benchmark
-before committing** — the "15–25× faster" figure in the findings is an extrapolation, and this
-project has twice punished the habit of trusting a proxy over a direct measurement.
+| | ms/step | speedup |
+|---|---|---|
+| 1660 Ti, fp32 | 3,722 | 1.0× |
+| L4, fp32 | 1,294 | **2.9×** |
+| L4, AMP | 837 | **4.4×** |
 
----
+**AMP pays, finally.** 1.50–1.55× at `hidden_dim=512`, 1.36–1.42× at 256. This is the first
+speedup AMP has ever produced anywhere in the project — it is inert on Turing, and it only
+works at all because of the sparse-operator fp32 fix (`torch.sparse.mm` has no half kernel).
+
+**`torch.compile` is a dead end.** With triton present and inductor working: **0.98×**. The
+workload is compute-bound, not launch-bound, exactly as the local `cudagraphs` result
+suggested. Do not spend more time on it.
+
+**Larger batches buy nothing.** Throughput is flat in batch size:
+
+| hidden | B | AMP ms/step | peak GB | samples/s |
+|---|---|---|---|---|
+| 512 | 8 | 837 | 1.29 | 9.6 |
+| 512 | 16 | 1,784 | 2.56 | 9.0 |
+| 512 | 32 | 3,605 | 5.09 | 8.9 |
+
+Cost is linear in `B`, as measured locally. So **memory headroom is not a lever** — 23 GB is
+heavily over-provisioned for a 5 GB peak, and a smaller/cheaper card loses nothing. Keep
+`batch_size: 8` unless the optimizer wants otherwise.
+
+**`hidden_dim` 512 vs 256 costs 1.56×**, not the 4× that `hidden_dim²` scaling implies. The MLP
+is not the sole bottleneck at this size, which makes 512 more affordable than the local
+profile suggested.
+
+**GCS read: 35 MB/s → 65 GB in ~0.5 h.** Measured from `us-east1`, *not* co-located with the
+bucket, and still fast. Region-matching matters less than assumed — capacity availability is
+the better reason to pick a zone.
+
+### Capacity is the real constraint
+
+`nvidia-l4` was **stocked out in all three `us-central1` zones**. Any launch script must try
+several zones:
+
+```bash
+for z in us-central1-a us-central1-b us-central1-c us-east1-c us-east1-d us-west1-a; do
+  gcloud compute instances create wnca-train --zone="$z" ... && break
+done
+```
+
+### Image family
+
+`pytorch-latest-gpu` no longer exists. Current families:
+
+```bash
+gcloud compute images list --project=deeplearning-platform-release --format="value(family)" | sort -u
+# pytorch-2-9-cu129-ubuntu-2204-nvidia-580   <- used here
+```
 
 ## Per-run workflow
 
@@ -179,6 +222,14 @@ gcloud compute scp --recurse wnca-train:~/weather-nca/runs ./runs
 # 9. DELETE (not stop)
 gcloud compute instances delete wnca-train --quiet
 ```
+
+**Do not inline shell commands into `gcloud compute ssh --command` from PowerShell.** Nested
+quoting is mangled by both PowerShell and cmd before gcloud sees it, and the failures are
+confusing (`unrecognized arguments`, half-parsed Python). Put the work in a script, commit it,
+and invoke the file. `scripts/cloud_bench.sh` exists for exactly this reason.
+
+Also: `git pull` on the instance will abort if anything is modified (e.g. `chmod +x`), and the
+run silently continues with the OLD script. Use `git reset --hard && git pull`.
 
 Steps 3 and 4 are not optional ceremony. `make smoke` catches a broken environment in two
 minutes instead of two hours, and the benchmark is what stops us guessing an epoch budget —
@@ -261,13 +312,15 @@ from 65 GB to 33 GB, which matters when paying for storage.
 
 - [ ] Budget cap set, with alerts
 - [ ] GPU quota granted (requested days earlier, not the same morning)
-- [ ] Bucket region identified; instance launched in a matching zone
+- [ ] Zone fallback list in the launch command — `nvidia-l4` was stocked out in all three
+      `us-central1` zones
 - [ ] `make test` and `make smoke` pass **on the instance**
 - [ ] `wnca benchmark` run, and the epoch budget chosen from it
 - [ ] `train.amp: true` — free 2–3× on Ampere and later, inert locally. **Tested**: sparse
       operators are forced to fp32 internally because `torch.sparse.mm` has no half kernel;
       without that fix AMP crashed on the first step
-- [ ] `batch_size` raised to use the available memory, and re-benchmarked
+- [ ] `batch_size` left at 8 — measured: throughput is flat in batch size, so memory headroom
+      is not a lever
 - [ ] Auto-shutdown backstop set
 - [ ] `scripts/spot_train.sh` used rather than a bare `wnca train`, with a GCS prefix set
 - [ ] Outer watchdog running, or a managed instance group configured

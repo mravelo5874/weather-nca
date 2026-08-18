@@ -52,13 +52,17 @@ class WB2Scorer:
 
     def to_grid(self, x: torch.Tensor) -> torch.Tensor:
         """[..., N, C] -> [..., n_cells, C], area-weighted conservative."""
-        shape = x.shape
-        flat = x.reshape(-1, shape[-2], shape[-1])
-        B, N, C = flat.shape
-        dense = flat.permute(1, 0, 2).reshape(N, B * C)
-        out = torch.sparse.mm(self.A, dense)
-        out = out.reshape(-1, B, C).permute(1, 0, 2)
-        return out.reshape(*shape[:-2], -1, C)
+        # fp32: no half kernel for sparse.mm, and this is the scoring path where precision
+        # matters more than speed.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            x = x.float()
+            shape = x.shape
+            flat = x.reshape(-1, shape[-2], shape[-1])
+            B, N, C = flat.shape
+            dense = flat.permute(1, 0, 2).reshape(N, B * C)
+            out = torch.sparse.mm(self.A, dense)
+            out = out.reshape(-1, B, C).permute(1, 0, 2)
+            return out.reshape(*shape[:-2], -1, C)
 
     def rmse(self, pred: torch.Tensor, truth: torch.Tensor) -> torch.Tensor:
         """Area-weighted RMSE on the WB2 grid, per channel. Squares pooled, root last."""

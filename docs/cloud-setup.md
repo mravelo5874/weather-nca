@@ -201,9 +201,39 @@ the data side of that:
   error. Fixed and regression-tested.
 - **`metrics.jsonl`** is written every epoch and survives without wandb.
 
-**The remaining gap:** nothing restarts the instance automatically. If a spot instance is
-reclaimed mid-run it stays dead until someone notices. Before any long unattended run, add a
-wrapper that recreates the instance and relaunches with `--resume auto`. Worth writing once.
+### The two layers of restart
+
+**Inside the instance: `scripts/spot_train.sh`.** Resumes from any existing checkpoint, mirrors
+results to GCS after every attempt, and on a genuine crash retries at a **lower learning rate** —
+retrying an identical diverged configuration just diverges again, which is exactly what
+happened to phase 2b′. It exits 75 (`EX_TEMPFAIL`) on preemption so the outer layer can tell
+"the VM went away" from "the run failed".
+
+```bash
+./scripts/spot_train.sh configs/phase2c_full.yaml gs://YOUR_BUCKET/wnca
+```
+
+**Outside: a watchdog**, because a script on the instance cannot recreate the instance it is
+dying with. Simplest version, run locally:
+
+```bash
+while true; do
+  state=$(gcloud compute instances describe wnca-train --zone=us-central1-a             --format="value(status)" 2>/dev/null || echo GONE)
+  if [[ "$state" != "RUNNING" ]]; then
+    echo "instance is $state -- recreating"
+    gcloud compute instances create wnca-train ... --provisioning-model=SPOT
+    gcloud compute ssh wnca-train --command       "cd weather-nca && nohup ./scripts/spot_train.sh configs/phase2c_full.yaml gs://YOUR_BUCKET/wnca > train.log 2>&1 &"
+  fi
+  sleep 120
+done
+```
+
+A managed instance group with autohealing is the production-grade version of the same idea and
+is worth it if runs stretch to days.
+
+**The state that must survive is already handled** — checkpoint (weights, optimizer, epoch,
+step, LR position, history), the cache, and `metrics.jsonl` — provided `GCS_PREFIX` is set so
+the mirror happens off-instance. Without it, a reclaimed VM takes the run's only copy with it.
 
 ---
 
@@ -234,10 +264,15 @@ from 65 GB to 33 GB, which matters when paying for storage.
 - [ ] Bucket region identified; instance launched in a matching zone
 - [ ] `make test` and `make smoke` pass **on the instance**
 - [ ] `wnca benchmark` run, and the epoch budget chosen from it
-- [ ] `train.amp: true` — free 2–3× on Ampere and later, inert locally
+- [ ] `train.amp: true` — free 2–3× on Ampere and later, inert locally. **Tested**: sparse
+      operators are forced to fp32 internally because `torch.sparse.mm` has no half kernel;
+      without that fix AMP crashed on the first step
 - [ ] `batch_size` raised to use the available memory, and re-benchmarked
 - [ ] Auto-shutdown backstop set
-- [ ] A plan for what happens if the spot instance is reclaimed overnight
+- [ ] `scripts/spot_train.sh` used rather than a bare `wnca train`, with a GCS prefix set
+- [ ] Outer watchdog running, or a managed instance group configured
+- [ ] Quota requested via CLI (more reliable than console navigation):
+      `gcloud quotas preferences create --service=compute.googleapis.com --quota-id=GPUS-ALL-REGIONS-per-project --preferred-value=1 --project=PROJECT --email=YOU`
 
 ---
 

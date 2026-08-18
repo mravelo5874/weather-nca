@@ -50,7 +50,14 @@ class MeshPerception(nn.Module):
         return out.reshape(N, B, C).permute(1, 0, 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # [B, N, C] -> [B, N, 4C]
-        return torch.cat(
-            [x, self._apply_op(self.gx, x), self._apply_op(self.gy, x), self._apply_op(self.lap, x)],
-            dim=-1,
-        )
+        # `torch.sparse.mm` has no half-precision CUDA kernel ("addmm_sparse_cuda not
+        # implemented for 'Half'"), so perception is forced to fp32 under AMP. That costs
+        # little: perception is ~20% of a sub-step and is memory-bound, while the update MLP
+        # -- the other ~80%, and dense -- still gets the tensor cores.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            xf = x.float()
+            return torch.cat(
+                [xf, self._apply_op(self.gx, xf), self._apply_op(self.gy, xf),
+                 self._apply_op(self.lap, xf)],
+                dim=-1,
+            )

@@ -250,3 +250,55 @@ def test_healthy_epoch_reports_no_skips(tiny_cfg, small_mesh, tiny_cache):
     cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
     out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
     assert out["skipped"] == 0 and np.isfinite(out["loss"])
+
+
+# --- spot preemption -------------------------------------------------------------------
+
+def test_preemption_flag_checkpoints_and_stops(tiny_cfg, small_mesh, tiny_cache, tmp_path,
+                                               monkeypatch):
+    """SIGTERM handling is the whole spot-instance safety story, and it has never fired.
+
+    Windows cannot deliver SIGTERM to a Python handler the way Linux does, so the signal
+    itself is untestable here -- but the logic it triggers is what matters: set the flag, and
+    the loop must write a resumable checkpoint and stop rather than carrying on.
+    """
+    import dataclasses
+
+    import wnca.train.loop as loop_mod
+    from wnca.train.loop import fit
+    from wnca.models.nca import build_model
+
+    cfg = dataclasses.replace(tiny_cfg, train=dataclasses.replace(tiny_cfg.train, epochs=3))
+    model = build_model(cfg, small_mesh)
+    torch.nn.init.normal_(model.update.head.weight, std=0.01)
+
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", True)
+    result = fit(cfg, model, small_mesh, tiny_cache, "cpu", tmp_path)
+
+    assert (tmp_path / "preempted.pt").exists(), "no resumable checkpoint written on preemption"
+    assert len(result["history"]["train"]) < cfg.train.epochs, "loop did not stop early"
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", False)
+
+
+def test_preemption_checkpoint_is_resumable(tiny_cfg, small_mesh, tiny_cache, tmp_path,
+                                            monkeypatch):
+    """A checkpoint that cannot be loaded back is not a safety net."""
+    import dataclasses
+
+    import wnca.train.loop as loop_mod
+    from wnca.train.loop import fit
+    from wnca.models.nca import build_model
+    from wnca.train.checkpoint import load_checkpoint
+
+    cfg = dataclasses.replace(tiny_cfg, train=dataclasses.replace(tiny_cfg.train, epochs=3))
+    model = build_model(cfg, small_mesh)
+    torch.nn.init.normal_(model.update.head.weight, std=0.01)
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", True)
+    fit(cfg, model, small_mesh, tiny_cache, "cpu", tmp_path)
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", False)
+
+    fresh = build_model(cfg, small_mesh)
+    opt = torch.optim.AdamW(fresh.parameters(), lr=cfg.train.lr)
+    blob = load_checkpoint(tmp_path / "preempted.pt", fresh, cfg, opt)
+    assert "step" in blob and "epoch" in blob
+    assert blob["extra"].get("history") is not None, "history lost -- the curve cannot continue"

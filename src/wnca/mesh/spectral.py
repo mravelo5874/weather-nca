@@ -120,11 +120,18 @@ class BandFilters:
         return self
 
     def _spmm(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply L~ to [B, N, C] by folding batch and channel into the dense side."""
-        B, N, C = x.shape
-        flat = x.permute(1, 0, 2).reshape(N, B * C)
-        out = torch.sparse.mm(self.L, flat)
-        return out.reshape(N, B, C).permute(1, 0, 2)
+        """Apply L~ to [B, N, C] by folding batch and channel into the dense side.
+
+        Forced to fp32: `torch.sparse.mm` has no half-precision CUDA kernel. Band energies are
+        squared sums over the whole field anyway, which is exactly the reduction fp16 handles
+        worst, so this is the right precision regardless of the kernel gap.
+        """
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            xf = x.float()
+            B, N, C = xf.shape
+            flat = xf.permute(1, 0, 2).reshape(N, B * C)
+            out = torch.sparse.mm(self.L, flat)
+            return out.reshape(N, B, C).permute(1, 0, 2)
 
     def filter_bands(self, x: torch.Tensor) -> torch.Tensor:
         """[B, N, C] -> [B, n_bands, N, C] via the Chebyshev recursion (one pass, all bands)."""

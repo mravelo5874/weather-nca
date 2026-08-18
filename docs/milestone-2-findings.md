@@ -3,7 +3,7 @@
 Recorded as phases complete. Everything here is measured on the local GTX 1660 Ti (6 GB) unless
 stated otherwise; re-measure on the cloud instance before budgeting.
 
-Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ (best model so far) · 2c–5 not started.**
+Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ (best model so far) · 2c diagnosed and pending · 2d–5 not started.**
 
 ---
 
@@ -341,6 +341,94 @@ coupling that drives the rest.
 
 ---
 
+## 2c. Three failed runs, one cause: the learning rate, not the precision
+
+Phase 2c failed three times on a cloud instance — fp16, bf16, then fp32 — with what looked like
+the same symptom. ~$12 and most of a day. The precision changes were **treating a symptom**.
+
+### What it actually was
+
+`lr = 1e-3` is too high for this configuration. Measured directly with a fixed-LR sweep
+(`scripts/diagnose.py --stages lr`), 500 steps each, no warmup, no decay:
+
+| lr | grad trend | max grad norm | non-finite / 500 |
+|---|---|---|---|
+| **1.0e-3** | 1.7× | **4.23e+12** | **287 (57%)** |
+| 5.0e-4 | 1.4× | 10.8 | 0 |
+| 3.0e-4 | 1.2× | 5.86 | 0 |
+
+It is a **cliff, not a slope** — halving the LR drops peak gradient norm by ~11 orders of
+magnitude. That matches the 20-sub-step Jacobian compounding: once the weights cross a
+threshold the backward explodes, which is also why it took ~2,000 steps to appear rather than
+failing immediately.
+
+### Why every earlier run survived the same nominal LR
+
+Not the LR *value* — the **schedule length**. 2b-pushforward ran 2,912 steps total, so cosine
+decay had pulled the LR to ~9e-5 by step 2337. 2c's schedule spans 56,976 steps and sits within
+0.3% of peak for thousands of steps. No previous run had ever trained at sustained 1e-3.
+
+| step | 2b-pushforward | 2c |
+|---|---|---|
+| 500 | 9.29e-04 | 1.00e-03 |
+| 2337 | **9.32e-05** | **9.97e-04** |
+
+**Generalisation:** the safe LR depends on how long the schedule holds near peak, so an LR
+validated on a short phase does not transfer to a long one. Scaling data volume 20× silently
+changed the optimisation problem.
+
+### 2c.1 Precision: what each format is actually worth
+
+Now that precision is known *not* to be the root cause, the three can be compared on merit.
+All measured at n_sub=5 on the 39-year cache.
+
+| format | verdict | evidence |
+|---|---|---|
+| **fp16** | **ruled out** | Perception's Laplacian block reaches **13,097** against a 65,504 ceiling — **5× headroom**, and shrinking as the mesh refines (it scales as 1/h²). This produced non-finite *batches* (forward overflow), a distinct failure from the LR issue's non-finite *gradients* with finite loss. |
+| **bf16** | **recommended** | Clean at the stable LR: 0 non-finite in 500 steps, trend 1.3×, max grad norm 5.84. **1.39× faster** (639 s vs 890 s for 500 steps). fp32's exponent range, so overflow is structurally impossible. |
+| **fp32** | safe fallback | Four clean runs historically; 1.4× slower for no measured benefit over bf16 at a sane LR. |
+
+The earlier bf16 failure (~50% non-finite gradients) was **the LR problem, not bf16** — fp32 at
+the same LR failed the same way. bf16 amplified it (50% vs 15%), which is consistent with 8
+mantissa bits pushing marginal gradients over the edge, but it did not cause it.
+
+Note the fp16 exclusion stands **independently of the LR fix**: it is an overflow-headroom
+argument, and n_sub=6 would put the Laplacian block near 32,000 — half the ceiling before
+training even starts.
+
+### 2c.2 The diagnostic, and two errors it caught in itself
+
+`scripts/diagnose.py` found in **45 minutes** what three multi-hour runs had failed to isolate.
+Six stages: env, cache, numerics, substeps, lr, matrix.
+
+Two methodology errors it exposed, both of which would have produced confident wrong answers:
+
+1. **Probing sub-step scaling with a randomly initialised head reports 3.9e9 gradient norm at
+   n=20; the actual trained checkpoint reports 2.58** — ten orders of magnitude apart. Taken at
+   face value the first would have condemned `n_substeps=20`, which is fine. Hence
+   `--checkpoint`, and an output caveat to read the *shape* of the growth, not the values.
+   The corrected reading does independently explain 2b′: n=40 carries 12× the gradient norm of
+   n=20, and 2b′ was the run that diverged at 40.
+2. **The `lr` and `matrix` stages called `Trainer._forward` directly, bypassing the autocast
+   context in `run_epoch`** — so every "amp" measurement was silently fp32. Caught only because
+   bf16 and fp32 returned byte-identical numbers. A diagnostic that measures the wrong thing
+   silently is worse than no diagnostic.
+
+Also worth recording: the suite was designed to "detect explosion by trend", and **the trend
+metric was the weakest of its three signals** — 1.7× at the failing LR, barely separable from
+1.2× at a safe one. The non-finite count and peak magnitude at 500 steps are what actually
+identified it.
+
+### 2c.3 A design flaw in the spot machinery
+
+Sending SIGTERM did not stop a run promptly. The handler breaks the training loop, but `fit()`
+then runs the full validation pass **and** the selection metric before writing `preempted.pt`.
+It ran 3+ minutes without checkpointing. **Spot preemption gives ~30 seconds**, so the spot
+path cannot save in time as written — it must checkpoint immediately on the flag, before
+val/selection. Not yet fixed.
+
+---
+
 ## 3. Bugs found, and what they cost
 
 Recorded because each was silent — no exception, no NaN, plausible-looking output.
@@ -363,7 +451,11 @@ Recorded because each was silent — no exception, no NaN, plausible-looking out
    check, after a wasted backward pass. Now a non-finite loss skips the batch before the
    optimizer sees it, and sustained divergence (>2% of an epoch) raises with an actionable
    message instead of silently skipping everything and reporting a meaningless metric.
-5. **Comparability slips.** Two evaluations differed only in `eval.max_windows` (28 vs 60),
+5. **`hash()` salted per process.** Synthetic caches seeded with `hash(split)` hold different
+   data across processes under the same cache tag — `cache_tag` does not cover the seed.
+   Measured: `hash("train")` returns 19047558, then 634882373. Fixed with a sha256 seed, plus a
+   control test asserting builtin `hash()` really is unstable.
+6. **Comparability slips.** Two evaluations differed only in `eval.max_windows` (28 vs 60),
    which shifts the start-time selection and moved persistence by 0.7%. Baselines that *should*
    be identical are the cheapest possible check that two runs are comparable — persistence
    matching to the digit is what validated both the phase 0 port and the 2a normalizer.

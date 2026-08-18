@@ -322,9 +322,14 @@ from 65 GB to 33 GB, which matters when paying for storage.
       `us-central1` zones
 - [ ] `make test` and `make smoke` pass **on the instance**
 - [ ] `wnca benchmark` run, and the epoch budget chosen from it
-- [ ] `train.amp: true` — free 2–3× on Ampere and later, inert locally. **Tested**: sparse
-      operators are forced to fp32 internally because `torch.sparse.mm` has no half kernel;
-      without that fix AMP crashed on the first step
+- [ ] `train.amp: true` — **bf16**, measured 1.39× on an L4. Selected automatically on compute
+      capability >= 8.0. fp16 is ruled out: perception's Laplacian block reaches 13,097 against
+      a 65,504 ceiling. Sparse operators are forced to fp32 internally regardless, because
+      `torch.sparse.mm` has no half kernel
+- [ ] **Learning rate re-validated for the schedule length.** An LR that is safe on a short
+      phase is not safe on a long one — a 57k-step cosine schedule holds near peak for
+      thousands of steps. Run `scripts/diagnose.py --stages lr` before any long run; it costs
+      ~15 min per LR and caught what three multi-hour runs did not
 - [ ] `batch_size` left at 8 — measured: throughput is flat in batch size, so memory headroom
       is not a lever
 - [ ] Auto-shutdown backstop set

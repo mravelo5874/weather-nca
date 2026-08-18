@@ -272,7 +272,11 @@ def stage_lr(cfg, ctx, steps: int, lrs) -> dict:
                 break
             b = Batch(prev.to(dev), cur.to(dev), tgt.to(dev), idx)
             tr._set_lr(lr)  # fixed, deliberately
-            pred, ovf, off = tr._forward(b, 1, 1, True)
+            # Autocast lives in Trainer.run_epoch, and this bypasses it -- so apply it here or
+            # every "amp" measurement is silently fp32. (It was, until this was caught by two
+            # precisions producing byte-identical numbers.)
+            with torch.autocast(tr.amp_device, dtype=tr.amp_dtype, enabled=tr.use_amp):
+                pred, ovf, off = tr._forward(b, 1, 1, True)
             obj, clean, _ = tr._loss(pred.float(), b.tgt[:, off:], ovf.float())
             tr.opt.zero_grad(set_to_none=True)
             obj.backward()
@@ -347,7 +351,8 @@ def stage_matrix(cfg, ctx, steps: int = 12) -> dict:
                 if i >= steps:
                     break
                 b = Batch(prev.to(dev), cur.to(dev), tgt.to(dev), idx)
-                pred, ovf, off = tr._forward(b, 1, 1, True)
+                with torch.autocast(tr.amp_device, dtype=tr.amp_dtype, enabled=tr.use_amp):
+                    pred, ovf, off = tr._forward(b, 1, 1, True)
                 obj, last_loss, _ = tr._loss(pred.float(), b.tgt[:, off:], ovf.float())
                 tr.opt.zero_grad(set_to_none=True)
                 obj.backward()

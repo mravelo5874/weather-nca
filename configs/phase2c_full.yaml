@@ -20,9 +20,19 @@
 #                          The CFL argument that motivated 40 was an offline proxy and the
 #                          direct diagnostic contradicted it.
 #   solar_forcing: true    Worth 19% on 2m temperature at 24h by ablation. Base default now.
-#   amp: true              Measured 1.50-1.55x on an L4 at hidden_dim=512. Inert on Turing,
-#                          so this only pays on the cloud instance. Requires the sparse-op
-#                          fp32 fix -- without it, AMP crashes on step one.
+#   amp: false             DISABLED after two failures on 2026-08-18, both precision-format
+#                          problems rather than model problems:
+#                            fp16 -- forward overflow. Mesh perception spans a ~1000x dynamic
+#                              range (Laplacian block max 8000 vs identity 7.2, because the
+#                              cotangent Laplacian scales as 1/h^2). fp16 caps at 65504, so
+#                              headroom is under 10x and the forward overflows once weights
+#                              grow. 143 non-finite batches, guard fired.
+#                            bf16 -- forward fine (0 non-finite batches) but the BACKWARD
+#                              produced inf gradients on ~50% of steps, sustained, starting at
+#                              the very first step while warmup had lr at 2e-6. Not divergence;
+#                              mechanism still UNEXPLAINED. See docs/milestone-2-findings.md.
+#                          fp32 has run this exact model four times with 0 non-finite
+#                          gradients. Costs the 1.5x AMP speedup: ~20 h instead of ~13 h.
 #   batch_size: 8          Measured: throughput is FLAT in batch size on an L4 (9.6 -> 8.9
 #                          samples/s from B=8 to 32). Larger batches buy nothing here.
 #   hidden_dim: 512        Measured only 1.56x the cost of 256 on an L4, not the 4x that
@@ -59,7 +69,7 @@ train:
   batch_size: 8
   lr: 1.0e-3
   warmup_steps: 500              # 500 steps is 7% of one epoch here, unlike the short phases
-  amp: true
+  amp: false
   pushforward: true
   noise_std: 0.05
   ckpt_windows: 12

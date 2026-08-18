@@ -1,0 +1,78 @@
+# Phase 2b-pushforward -- is the long-lead divergence a TRAINING-OBJECTIVE problem?
+#
+# GATES (against phase 2b, identical splits):
+#   1. long-lead RMSE bounded near climatology       -- PRIMARY   (2b: 3.2x clim at 360h)
+#   2. sustained perturbation growth <= 1.05                      (2b: x1.062, 27/28 over)
+#   3. 2m_temperature skill positive at +24h                      (2b: -48%)
+#   4. 24h z500 not much WORSE than 2b -- a guard, not a target   (2b: 297.6)
+#
+# ---------------------------------------------------------------------------------------
+# Why this experiment
+#
+# Phase 2b showed coupling helps to ~53h then diverges badly (3.2x climatology at 15 days).
+# Phase 2b' tested the numerical explanation -- more sub-steps -- and it failed. The argument
+# for why it had to fail is in docs/milestone-2-findings.md: dt * n_substeps is pinned at 1.0,
+# so the model learns the total per-window map, and discretising that map more finely cannot
+# change its amplification unless the amplification came from discretisation error. It did not.
+#
+# That leaves the objective. Single-step MSE only ever scores one window ahead, so nothing
+# penalises what the model does at window 10 and it is free to learn an amplifying map.
+#
+# `pushforward` changes the states the model trains FROM: unroll one window under no_grad,
+# then take the gradient step from that state. The rule is trained to contract error from
+# states it actually produces rather than only from clean ERA5 analyses. This is a different
+# mechanism from noise_std = 0.05, which perturbs the seed with Gaussian noise the model can
+# learn to ignore.
+#
+# Everything else is phase 2b exactly, so 2b is the control.
+# ---------------------------------------------------------------------------------------
+#
+# Two deltas from 2b rather than one, deliberately:
+#
+#   - `pushforward` is the variable under test.
+#   - `solar_forcing` is additive, already validated by ablation in 2b' (worth 19% on 2m
+#     temperature at 24h), and leaving it off would keep 2t broken for no reason. Critically
+#     it can be separated AFTER the fact for free by re-evaluating with the forcing zeroed --
+#     pushforward cannot, which is why pushforward is the one being tested.
+#
+# NOT changed, and why:
+#
+#   - n_substeps stays 20 (2b's value, reverted from 2b's 40): no measured benefit, exactly
+#     2.0x the cost.
+#   - lr stays 1e-3 and warmup_steps stays 0. Pushforward's extra window runs under no_grad,
+#     so the BACKWARD graph is the same depth as 2b -- which was stable for all 8 epochs on
+#     this schedule. Adding warmup would also break comparability, and the arithmetic in the
+#     findings shows it would not have prevented 2b's divergence anyway (it ends at step 500;
+#     2b' diverged around step 900, and warmup would have left the LR there 19% HIGHER by
+#     delaying the cosine decay).
+#
+# Risk profile differs from 2b': pushforward trains on the model's own states, which drift
+# further off-manifold as training progresses, so its instability risk grows LATE rather than
+# early. Protection is the divergence guard (skip non-finite batches, raise on sustained
+# divergence) plus `--resume auto` at a lower LR.
+phase: phase2b_pushforward
+
+data:
+  train_years: [2015, 2016]      # identical to phase 0 and 2b
+  val_years: [2017]
+  test_years: [2018]
+
+state:
+  c_hidden: 32
+  solar_forcing: true
+
+model:
+  hidden_dim: 512
+  n_layers: 4
+  n_substeps: 20                 # 2b's value
+  dt: 0.05
+
+train:
+  epochs: 8
+  batch_size: 8
+  lr: 1.0e-3
+  warmup_steps: 0
+  noise_std: 0.05                # kept: distinct mechanism from pushforward, and 2b had it
+  pushforward: true
+  ckpt_windows: 8
+  ckpt_subsample: 0.25

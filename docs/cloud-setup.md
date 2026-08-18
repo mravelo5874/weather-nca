@@ -94,16 +94,29 @@ granted, and approval takes anywhere from an hour to a day.
 IAM & Admin → Quotas → filter for `GPUS_ALL_REGIONS` → request an increase (1–4 is plenty).
 Request Spot/preemptible quota too if it is listed separately.
 
-### 5. Find the bucket's region
+### 5. The bucket's region -- measure it, do not look it up
 
-This decides which zone to launch in, and it is the entire point of using GCP here.
+The WeatherBench-2 bucket grants **object** reads but not **bucket metadata** reads, so
 
 ```bash
-gsutil ls -L -b gs://weatherbench2 | grep -i location
+gsutil ls -L -b gs://weatherbench2      # AccessDeniedException: 403 storage.buckets.get
 ```
 
-Launch in a zone inside whatever that reports. (It could not be read anonymously from the local
-machine, so this has to be checked once authenticated.)
+fails even when fully authenticated. That is expected and harmless: `storage.objects.list` and
+`storage.objects.get` both work, which is all the pipeline needs.
+
+So the location cannot be looked up. Instead:
+
+1. **Start in `us-central1`.** Google Research public datasets are conventionally US
+   multi-region, and us-central1 also has the best GPU and spot availability.
+2. **Verify with a throughput test on the instance** -- a real measurement takes a minute:
+
+```bash
+time gsutil -m cp -r   gs://weatherbench2/datasets/era5/1959-2023_01_10-6h-240x121_equiangular_with_poles_conservative.zarr/geopotential/0.0.0.0   /tmp/
+```
+
+Hundreds of MB/s means in-region and the cache build will be fast. Home-connection speeds mean
+cross-region -- try `us-east1` or `us-west1` before committing to a 65 GB build.
 
 ---
 

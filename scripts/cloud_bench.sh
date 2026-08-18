@@ -19,8 +19,12 @@ python3 -c 'import triton;print("triton",triton.__version__)' 2>/dev/null || ech
 echo; echo "=============== 2. REPO + DEPS ==============="
 [ -d weather-nca ] || git clone -q "$REPO" weather-nca
 cd weather-nca || exit 1
-pip install -q -e ".[dev]" 2>&1 | tail -2
-echo "installed"
+# The deep-learning images ship a setuptools too old for PEP 660, so an editable install fails
+# with "build backend is missing the 'build_editable' hook". Upgrade first, and fall back to a
+# regular install rather than silently continuing with no package.
+pip install -q --upgrade pip setuptools wheel 2>&1 | tail -1
+pip install -q -e ".[dev]" 2>&1 | tail -2 || pip install -q ".[dev]" 2>&1 | tail -2
+python3 -c "import wnca, pytest, gcsfs; print('wnca importable')" || { echo "INSTALL FAILED"; exit 1; }
 
 echo; echo "=============== 3. UNIT TESTS (Linux compat) ==============="
 python3 -m pytest tests/ -q 2>&1 | tail -3

@@ -52,6 +52,20 @@ class UpdateRule(nn.Module):
         nn.init.zeros_(self.head.weight)  # untrained model is exactly the identity map
         nn.init.zeros_(self.head.bias)
 
+        if cfg.model.spectral_norm:
+            # Bound the Lipschitz constant of the update map. The 2c divergence was the
+            # weight norm ratcheting across the 20-sub-step stability threshold; with every
+            # hidden layer's sigma_max pinned near 1, the per-window gain is bounded by
+            # ~(1 + dt * sigma_head)^n_substeps -- note sigma_head is NOT pinned, so this
+            # bounds the hidden-layer contribution only; the head remains a free
+            # amplification path held by weight_decay, not by construction.
+            # Hidden layers ONLY: the head is zero-init and spectral_norm's power iteration
+            # divides by the weight's norm, which NaNs on an exactly-zero weight (verified
+            # on torch 2.6). film is left free too -- capping it would cap ensemble spread.
+            self.layers = nn.ModuleList(
+                [nn.utils.spectral_norm(layer) for layer in self.layers]
+            )
+
     def forward(self, perceived: torch.Tensor, cond: torch.Tensor,
                 z: torch.Tensor | None = None) -> torch.Tensor:
         """perceived [B, N, 4C] | cond [B, N, c_cond] | z [B, noise_dim] or None.

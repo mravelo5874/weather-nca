@@ -69,6 +69,19 @@ model:
   n_layers: 4
   n_substeps: 20
   dt: 0.05
+  # ON, and it is the primary stability fix. Attempt 5's post-mortem: the 20-sub-step
+  # recurrence has a stability threshold and the input layer's weight norm ratchets across
+  # it linearly; lr cuts only move the onset later. Spectral norm pins every hidden layer's
+  # sigma_max ~1, which bounds the HIDDEN-layer contribution to the composed map's gain.
+  # Hidden layers only: the zero-init head NaNs spectral_norm's power iteration (verified,
+  # torch 2.6). The head is therefore an UNBOUNDED amplification path -- measured, with the
+  # hidden layers pinned, a one-window relative state change of 1.8 / 116 / 7.4e4 at head
+  # std 0.1 / 1.0 / 10.0. Real heads sit near std 0.015 and grew +30% over the 3,900 traced
+  # steps (vs layers.0's +14%), so there is margin but it is NOT bounded by construction;
+  # weight_decay below is what holds it. Watch ||head.weight||, not just sigma.
+  # NOTE for 3a: checkpoints from this run carry spectral-norm buffers, so phase 3a must
+  # also set model.spectral_norm: true to warm-start from them.
+  spectral_norm: true
 
 train:
   # 7,117 batches/epoch. At the measured 837 ms/step on an L4 with AMP that is ~1.7 h/epoch,
@@ -77,9 +90,20 @@ train:
   epochs: 8
   batch_size: 8
   lr: 3.0e-4
+  # RAISED from 1e-5, which was measured to be ~11,000x too weak to oppose the weight-norm
+  # ratchet (growth 1.745e-3/step vs decay pull 1.59e-7/step). Balance requires
+  # wd ~ growth / (lr * ||w||) = 1.745e-3 / (2.9e-4 * 55) ~ 0.1. With spectral_norm pinning
+  # the hidden layers, this now acts mainly on the unwrapped head, film and biases -- the
+  # residual ratchet path. Validate before launch: scripts/diagnose.py --stages lr should
+  # show |w0|/step ~ 0 (onset~ inf) with spectral_norm on.
+  weight_decay: 0.1
   warmup_steps: 500              # 500 steps is 7% of one epoch here, unlike the short phases
   amp: true
   pushforward: true
   noise_std: 0.05
   ckpt_windows: 12
   ckpt_subsample: 0.25
+  # Rolling mid-epoch checkpoint to last.pt. Attempt 4 diverged at step 11,103, mid-epoch-2;
+  # the nearest resume point was epoch 1, ~4,000 steps (~1 h of L4 time) back. Every 2,000
+  # steps caps that at ~28 min. Distinct from the timestamped best_*.pt selection checkpoints.
+  ckpt_every_steps: 2000

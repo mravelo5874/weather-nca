@@ -14,9 +14,12 @@ error from states it actually produces.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import signal
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +47,9 @@ def _install_sigterm_handler():
         signal.signal(signal.SIGTERM, handler)
     except (ValueError, OSError):  # not on the main thread, or unsupported
         pass
+
+
+_TRACE_LAYERS_EVERY = 50
 
 
 @dataclass
@@ -83,7 +89,22 @@ class Trainer:
         self.opt = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr,
                                      weight_decay=cfg.train.weight_decay)
         self.step = 0
+        self.epoch = 0  # fit() keeps this current, for mid-epoch checkpoints
         self.best = float("inf")
+        # Optional per-step gradient trace (diagnostics only; see fit()).
+        self.grad_trace: Path | None = None
+        # Optional rolling mid-epoch checkpoint path (fit() sets it from ckpt_every_steps).
+        self.rolling_ckpt: Path | None = None
+        # Finite-but-absurd loss guard: a diverged model does not always produce a NaN --
+        # phase 2c's epoch-2 train loss was 3.69e23, perfectly finite in fp32. A batch loss
+        # beyond `_absurd_factor` x the running median of recent losses is skipped and
+        # counted; sustained occurrences abort like the non-finite guards do. The window is
+        # Trainer-level (NOT reset per epoch): a model destroyed mid-epoch must still be
+        # judged against the healthy losses that preceded it. Absurd values are excluded
+        # from the window so the median cannot chase the runaway upward.
+        self._loss_window: deque[float] = deque(maxlen=200)
+        self._absurd_factor = 100.0
+        self._absurd_arm = 20  # batches in the window before the guard arms
 
         # AMP matters on the cloud GPUs, not on a 1660 Ti: Turing has no tensor cores, so
         # locally this is roughly a no-op. Autocast has no mps backend, hence the fallback.
@@ -213,6 +234,30 @@ class Trainer:
         parts["overflow"] = float(ovf.item())
         return total, float(field.item()), parts
 
+    # ---- diagnostics ----
+    def _write_grad_trace(self, gn: float, loss: float, lr: float) -> None:
+        """Append one line per optimizer step: the PRE-clip gradient norm, loss and LR.
+
+        `clip_grad_norm_` returns the norm it measured before clipping, which is the quantity
+        that matters here -- a clipped step still lands, so the post-clip norm is constant by
+        construction and says nothing about divergence onset.
+
+        Per-parameter norms every `_TRACE_LAYERS_EVERY` steps: they cost a pass over the
+        parameter list, which is not free at 7k steps/epoch, but the whole point is to see
+        WHICH block blows up first.
+        """
+        rec = {"step": self.step, "grad_norm": gn, "loss": loss, "lr": lr}
+        if self.step % _TRACE_LAYERS_EVERY == 0:
+            rec["layers"] = {
+                n: float(p.grad.norm()) for n, p in self.model.named_parameters()
+                if p.grad is not None
+            }
+            rec["weights"] = {
+                n: float(p.detach().norm()) for n, p in self.model.named_parameters()
+            }
+        with open(self.grad_trace, "a", encoding="utf-8") as fh:
+            print(json.dumps(rec), file=fh)
+
     # ---- epochs ----
     def run_epoch(self, loader, n_out: int, train: bool, total_steps: int = 1,
                   split: str = "train") -> dict:
@@ -221,7 +266,10 @@ class Trainer:
         cfg = self.cfg
         self.split = split  # selects the right solar-forcing table
         self.model.train(train)
-        acc, nb, skipped = 0.0, 0, 0
+        acc, nb, skipped, bad_grad, bad_loss = 0.0, 0, 0, 0, 0
+        # Same tolerance for both divergence guards: a handful of bad batches is an
+        # outlier, 2% of an epoch is a diverged model.
+        tol = max(10, 0.02 * len(loader))
         M = cfg.ensemble.m_train if train else cfg.ensemble.m_val
 
         for prev, cur, tgt, idx in loader:
@@ -240,7 +288,7 @@ class Trainer:
             # works, but wastes a backward pass and hides how often it is happening.
             if not np.isfinite(clean):
                 skipped += 1
-                if skipped > max(10, 0.02 * len(loader)):
+                if skipped > tol:
                     raise RuntimeError(
                         f"{skipped} non-finite batches this epoch -- the model has diverged, "
                         "not hit an outlier. Resume from the last good checkpoint at a lower "
@@ -248,30 +296,77 @@ class Trainer:
                     )
                 continue
 
+            # Finite-but-absurd: divergence does not always produce a NaN. Phase 2c's
+            # destroyed model reported a FINITE 3.69e23 train loss for ten hours while no
+            # guard watched the magnitude. The onset trace goes 0.219 -> 63.9 -> 3.0e8 in
+            # four steps, so a 100x-median rule catches a runaway within a few batches.
+            if (len(self._loss_window) >= self._absurd_arm
+                    and clean > self._absurd_factor * float(np.median(self._loss_window))):
+                bad_loss += 1
+                if bad_loss > tol:
+                    raise RuntimeError(
+                        f"{bad_loss} finite-but-absurd batches this epoch (loss {clean:.3g} "
+                        f"vs running median {float(np.median(self._loss_window)):.3g}) -- "
+                        "the model has diverged, not hit an outlier. Resume from the last "
+                        "good checkpoint (wnca train --resume auto)."
+                    )
+                continue
+            self._loss_window.append(clean)
+
             if train:
-                self._set_lr(self._lr_at(self.step, total_steps))
+                lr_now = self._lr_at(self.step, total_steps)
+                self._set_lr(lr_now)
                 self.opt.zero_grad(set_to_none=True)
                 if self.scaler is not None:
                     self.scaler.scale(obj).backward()
                     self.scaler.unscale_(self.opt)
                     gn = nn.utils.clip_grad_norm_(self.model.parameters(), cfg.train.grad_clip)
-                    if assert_finite(float(gn), "gradient norm"):
+                    ok = assert_finite(float(gn), "gradient norm")
+                    if ok:
                         self.scaler.step(self.opt)
                     self.scaler.update()
                 else:
                     obj.backward()
                     gn = nn.utils.clip_grad_norm_(self.model.parameters(), cfg.train.grad_clip)
-                    if assert_finite(float(gn), "gradient norm"):
+                    ok = assert_finite(float(gn), "gradient norm")
+                    if ok:
                         self.opt.step()
+
+                # A non-finite GRADIENT with a finite loss skips the optimizer step but left the
+                # loop running: phase 2c spent 10 hours and ~$9 at 100% GPU taking zero steps,
+                # because the guard above only watches the loss. Count these too.
+                if not ok:
+                    bad_grad += 1
+                    if bad_grad > tol:
+                        raise RuntimeError(
+                            f"{bad_grad} non-finite gradients this epoch -- the model has "
+                            "diverged, not hit an outlier. Resume from the last good checkpoint "
+                            "at a lower learning rate "
+                            "(wnca train --resume auto --set train.lr=...)."
+                        )
+                if self.grad_trace is not None:
+                    self._write_grad_trace(float(gn), clean, lr_now)
                 self.step += 1
+
+                # Rolling mid-epoch checkpoint. 2c diverged at step 11,103 of a 7,122-step
+                # epoch, and reproducing the onset cost ~4,000 steps from the epoch-1
+                # checkpoint; a rolling save caps that loss. Fixed name `last.pt`, separate
+                # from the timestamped `best_*.pt` selection checkpoints -- `--resume auto`
+                # (pattern best_*.pt) never picks it up accidentally.
+                if (self.rolling_ckpt is not None and cfg.train.ckpt_every_steps > 0
+                        and self.step % cfg.train.ckpt_every_steps == 0):
+                    save_checkpoint(self.rolling_ckpt, self.model, cfg, self.opt,
+                                    epoch=self.epoch, step=self.step, metric=None)
 
             acc += clean
             nb += 1
             if _PREEMPTED["flag"]:
                 break
-        if skipped:
-            print(f"  skipped {skipped}/{len(loader)} non-finite batches")
-        return {"loss": acc / max(nb, 1), "batches": nb, "skipped": skipped}
+        if skipped or bad_grad or bad_loss:
+            print(f"  skipped {skipped}/{len(loader)} non-finite batches, "
+                  f"{bad_grad} non-finite gradients, {bad_loss} finite-but-absurd batches")
+        return {"loss": acc / max(nb, 1), "batches": nb, "skipped": skipped,
+                "bad_grad": bad_grad, "bad_loss": bad_loss}
 
     @torch.no_grad()
     def selection_metric(self, loader) -> float:  # noqa: D401
@@ -360,6 +455,13 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     trainer = Trainer(cfg, model, mesh, cache, device, bands, tracker)
+    # WNCA_GRAD_TRACE=1 writes a per-step gradient trace next to the checkpoints. Off by
+    # default: it is a divergence-forensics tool, not something a production run needs.
+    if os.environ.get("WNCA_GRAD_TRACE"):
+        trainer.grad_trace = out_dir / "grad_trace.jsonl"
+        print(f"  gradient trace -> {trainer.grad_trace}")
+    if cfg.train.ckpt_every_steps > 0:
+        trainer.rolling_ckpt = out_dir / "last.pt"
     if optimizer is not None:
         trainer.opt = optimizer  # carries the restored optimizer state
 
@@ -398,7 +500,20 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
 
     for ep in range(start_epoch, cfg.train.epochs):
         t0 = time.time()
+        trainer.epoch = ep
         tr = trainer.run_epoch(train_loader, 1, True, total_steps)
+
+        # SIGTERM during the training epoch: CHECKPOINT FIRST, score never. Spot gives ~30 s
+        # of notice and validation + selection cost 3+ minutes -- the old order (validate,
+        # then checkpoint) would lose the run's only state to a preemption, which is why
+        # every 2c run paid on-demand rates (docs/cloud-compute-incidents.md section 4.1).
+        if _PREEMPTED["flag"]:
+            p = save_checkpoint(out_dir / "preempted.pt", model, cfg, trainer.opt,
+                                epoch=ep, step=trainer.step, metric=None,
+                                extra={"history": history})
+            print(f"  preempted -- state saved to {p} (checkpoint written before scoring)")
+            break
+
         va = trainer.run_epoch(val_loader, 1, False, split="val")
         sel = trainer.selection_metric(sel_loader)
         # Probe on the selection loader: it carries multi-window targets, and spread is only

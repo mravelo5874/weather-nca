@@ -240,20 +240,51 @@ def stage_substeps(cfg, ctx) -> dict:
     return out
 
 
+# Spectral norm does NOT wrap the head (it is zero-init and the power iteration NaNs on an
+# exactly-zero weight), so the head stays a free amplification path. Measured with every hidden
+# layer pinned: a one-window relative state change of 1.8 / 116 / 7.4e4 at head weight std
+# 0.1 / 1.0 / 10.0, against a real trained head near std 0.015. In the attempt-5 trace the head
+# was the fastest-growing parameter (+30% vs layers.0's +14%), which is why it needs its own line.
+#
+# Tracked as RMS (norm / sqrt(numel)), not a ratio from the starting value: the head is
+# zero-init, so a ratio rule divides by ~0 and fires on every fresh model. The threshold is
+# absolute and shape-independent.
+_HEAD_DANGER_STD = 0.1
+# Below this the head is still effectively at its zero init, and the fast rise out of zero is
+# by design, not a ratchet -- a linear fit across that transient predicts a crossing that never
+# happens. A trained head sits near 0.015, well clear of this.
+_HEAD_FRESH_STD = 1e-3
+
+
 def stage_lr(cfg, ctx, steps: int, lrs) -> dict:
     """Short runs at several learning rates, watching the gradient-norm trend.
 
     Explosion is preceded by growth, so a few hundred steps at fixed LR reveals where a setting
     is heading without waiting the ~2,000 steps the real failure took. LR is held FIXED here
     (no warmup, no decay) so the effect of the value is not confounded by the schedule.
+
+    The 2c post-mortem adds a second signal: the divergence was the input layer's weight norm
+    ratcheting LINEARLY (~1.745e-3/step) until the composed sub-step map crossed its stability
+    threshold -- onset came at ~+14% weight-norm growth. A 500-step probe cannot see a
+    7,000-step onset by counting non-finites, but it CAN measure the ratchet's slope and
+    extrapolate the crossing step. That turns "probe length must exceed onset" into a
+    measurement.
+
+    What is tracked depends on model.spectral_norm. Off: the Frobenius norm of layers.0's
+    weight, the incident's measured proxy. On: sigma_max of the effective weight -- the gain
+    the wrapper pins to 1. (The Frobenius norm is useless under spectral norm: sigma_max is
+    fixed but the smaller singular values are free to spread, so ||W||_F still grows.) A
+    flat sigma_max line is how the fix is validated.
     """
     _hdr(f"LR SWEEP ({steps} steps each, fixed LR, no schedule)")
     from wnca.models.nca import build_model
 
     dev, mesh, cache = ctx["device"], ctx["mesh"], ctx["cache"]
     pf = 1 if cfg.train.pushforward else 0
+    total_steps = len(make_loader(cache, "train", cfg, n_out=1 + pf)) * cfg.train.epochs
+    w_lbl = "sig0/step" if cfg.model.spectral_norm else "|w0|/step"
     print(f"  {'lr':>9} {'gn @start':>10} {'gn @end':>10} {'trend':>8} {'max gn':>10} "
-          f"{'nonfinite':>10} verdict")
+          f"{'nonfinite':>10} {w_lbl:>10} {'onset~':>8} {'head/step':>10} verdict")
     results = {}
 
     for lr in lrs:
@@ -265,8 +296,16 @@ def stage_lr(cfg, ctx, steps: int, lrs) -> dict:
         loader = make_loader(cache, "train", c, n_out=1 + pf, shuffle=True)
         tr.split = "train"
         model.train()
+        # The effective weight (post-normalisation when spectral_norm is on): the ratchet
+        # lives in what the forward pass actually applies, not in the raw parameter. Under
+        # spectral_norm track sigma_max (the pinned quantity); otherwise the Frobenius norm
+        # (the incident's measured proxy).
+        w_layer = getattr(getattr(model, "update", None), "layers", [None])[0]
+        track_sigma = c.model.spectral_norm and w_layer is not None
+        # The head is never wrapped, so sigma pinning says nothing about it.
+        head = getattr(getattr(model, "update", None), "head", None)
 
-        norms, n_bad = [], 0
+        norms, wnorms, hnorms, n_bad = [], [], [], 0
         for i, (prev, cur, tgt, idx) in enumerate(loader):
             if i >= steps:
                 break
@@ -284,11 +323,19 @@ def stage_lr(cfg, ctx, steps: int, lrs) -> dict:
             if np.isfinite(gn):
                 tr.opt.step()
                 norms.append(gn)
+                if w_layer is not None:
+                    w = w_layer.weight
+                    wnorms.append(float(torch.linalg.matrix_norm(w.float(), 2))
+                                  if track_sigma else float(w.norm()))
+                if head is not None:
+                    hnorms.append(float(head.weight.norm())
+                                  / max(1.0, head.weight.numel() ** 0.5))
             else:
                 n_bad += 1
 
         if not norms:
-            print(f"  {lr:>9.1e} {'--':>10} {'--':>10} {'--':>8} {'--':>10} {n_bad:>9} EXPLODED")
+            print(f"  {lr:>9.1e} {'--':>10} {'--':>10} {'--':>8} {'--':>10} {n_bad:>9} "
+                  f"{'--':>10} {'--':>8} {'--':>10} EXPLODED")
             results[lr] = {"exploded": True}
             continue
         k = max(3, len(norms) // 5)
@@ -297,30 +344,67 @@ def stage_lr(cfg, ctx, steps: int, lrs) -> dict:
         mx = float(np.max(norms))
         clip = cfg.train.grad_clip
         hot = mx > 50 * clip          # peak gradient far above the clip threshold
+
+        # Ratchet check, two forms. Frobenius proxy (spectral_norm off): linear fit, then
+        # extrapolate the +14% growth that preceded the measured 2c crossing. sigma_max
+        # (spectral_norm on): the wrapper's contract is sigma ~ 1, and a slope fit on its
+        # power-iteration jitter false-alarms -- instead check the pin held at all.
+        slope, onset = 0.0, float("inf")
+        if len(wnorms) >= 10:
+            slope = float(np.polyfit(np.arange(len(wnorms)), wnorms, 1)[0])
+            if track_sigma:
+                if max(wnorms) > 1.1:
+                    onset = 0.0  # the pin failed: power iteration is not converging
+            elif slope > 0:
+                onset = 0.14 * wnorms[0] / slope
+        ratchet = onset < total_steps
+
+        # Head ratchet: the residual path spectral norm leaves free. Extrapolate when the
+        # head's RMS would reach _HEAD_DANGER_STD. Skipped for a still-zero-init head, whose
+        # initial rise is by design (see _HEAD_FRESH_STD).
+        h_slope, h_onset = 0.0, float("inf")
+        if len(hnorms) >= 10:
+            h_slope = float(np.polyfit(np.arange(len(hnorms)), hnorms, 1)[0])
+            if h_slope > 0 and hnorms[0] >= _HEAD_FRESH_STD:
+                h_onset = (_HEAD_DANGER_STD - hnorms[0]) / h_slope
+        head_ratchet = h_onset < total_steps
+
         if n_bad:
             v = "NON-FINITE"
         elif trend >= 3:
             v = "RISING"
         elif hot:
             v = "SPIKY"
+        elif ratchet:
+            v = "RATCHET"
+        elif head_ratchet:
+            v = "HEAD-RATCHET"
         else:
             v = "ok"
         print(f"  {lr:>9.1e} {start:>10.3g} {end:>10.3g} {trend:>7.1f}x {mx:>10.3g} "
-              f"{n_bad:>9} {v}")
-        results[lr] = {"start": start, "end": end, "trend": trend, "max": mx, "non_finite": n_bad}
+              f"{n_bad:>9} {slope:>10.2e} "
+              f"{'inf' if onset == float('inf') else f'{onset:>8.3g}':>8} "
+              f"{h_slope:>10.2e} {v}")
+        results[lr] = {"start": start, "end": end, "trend": trend, "max": mx,
+                       "non_finite": n_bad, "w_slope": slope, "w_onset": onset,
+                       "head_slope": h_slope, "head_onset": h_onset}
         del model, tr
         torch.cuda.empty_cache() if dev == "cuda" else None
 
     safe = [lr for lr, r in results.items()
             if not r.get("exploded") and r.get("non_finite", 1) == 0
-            and r.get("trend", 9) < 3 and r.get("max", 1e30) <= 50 * cfg.train.grad_clip]
+            and r.get("trend", 9) < 3 and r.get("max", 1e30) <= 50 * cfg.train.grad_clip
+            and r.get("w_onset", 0) >= total_steps
+            and r.get("head_onset", 0) >= total_steps]
     if safe:
-        _verdict(OK, f"largest LR with a flat gradient trend: {max(safe):.1e}")
+        _verdict(OK, f"largest LR with a flat gradient trend and no weight-norm ratchet: "
+                     f"{max(safe):.1e}")
         print(f"       recommend lr <= {max(safe):.1e} for a long run "
               "(a long cosine schedule holds near peak for thousands of steps)")
     else:
-        _verdict(FAIL, "every LR tested shows a rising or non-finite gradient trend -- "
-                       "try lower values, or reduce n_substeps")
+        _verdict(FAIL, "every LR tested shows a rising/non-finite gradient trend or a "
+                       "weight-norm ratchet (hidden or head) inside the schedule -- lower "
+                       "the LR, raise weight_decay, or enable model.spectral_norm")
     return results
 
 

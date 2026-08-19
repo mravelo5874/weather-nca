@@ -244,12 +244,48 @@ def test_sustained_divergence_raises_rather_than_grinding_on(tiny_cfg, small_mes
         tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
 
 
+def test_sustained_nonfinite_gradients_raise_even_though_the_loss_is_finite(
+        tiny_cfg, small_mesh, tiny_cache, monkeypatch):
+    """THE phase-2c regression. Its loss stayed finite -- 3.7e23 is nowhere near the fp32
+    ceiling -- while every gradient overflowed to inf. The loss guard therefore never fired,
+    every optimizer step was skipped, and the run continued for three more epochs and ten
+    hours at 100% GPU taking zero steps, reporting a val_loss identical to seven decimal
+    places each time. Finite loss plus non-finite gradient is a diverged model too.
+    """
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_",
+                        lambda *a, **k: torch.tensor(float("inf")))
+    with pytest.raises(RuntimeError, match="non-finite gradients"):
+        tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+
+
+def test_a_few_bad_gradients_are_tolerated(tiny_cfg, small_mesh, tiny_cache, monkeypatch):
+    """The counterpart: an isolated gradient spike is an outlier, not a divergence, and must
+    not abort the run. Only the sustained case is fatal."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    real = torch.nn.utils.clip_grad_norm_
+    calls = {"n": 0}
+
+    def spiky(*a, **k):
+        calls["n"] += 1
+        return torch.tensor(float("inf")) if calls["n"] <= 3 else real(*a, **k)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", spiky)
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+    assert out["bad_grad"] == 3 and out["skipped"] == 0
+    assert np.isfinite(out["loss"])
+
+
 def test_healthy_epoch_reports_no_skips(tiny_cfg, small_mesh, tiny_cache):
     from wnca.data.dataset import make_loader
 
     cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
     out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
-    assert out["skipped"] == 0 and np.isfinite(out["loss"])
+    assert out["skipped"] == 0 and out["bad_grad"] == 0 and np.isfinite(out["loss"])
 
 
 # --- spot preemption -------------------------------------------------------------------
@@ -302,3 +338,134 @@ def test_preemption_checkpoint_is_resumable(tiny_cfg, small_mesh, tiny_cache, tm
     blob = load_checkpoint(tmp_path / "preempted.pt", fresh, cfg, opt)
     assert "step" in blob and "epoch" in blob
     assert blob["extra"].get("history") is not None, "history lost -- the curve cannot continue"
+
+
+def test_preemption_checkpoints_before_scoring(tiny_cfg, small_mesh, tiny_cache, tmp_path,
+                                               monkeypatch):
+    """Spot gives ~30 s of notice; validation + selection cost 3+ minutes. The checkpoint must
+    hit disk BEFORE any scoring runs, or a preemption takes the run's only state with it --
+    incidents doc 4.1, the reason every 2c run paid on-demand rates."""
+    import dataclasses
+
+    import wnca.train.loop as loop_mod
+    from wnca.train.loop import Trainer, fit
+    from wnca.models.nca import build_model
+
+    cfg = dataclasses.replace(tiny_cfg, train=dataclasses.replace(tiny_cfg.train, epochs=3))
+    model = build_model(cfg, small_mesh)
+    torch.nn.init.normal_(model.update.head.weight, std=0.01)
+
+    calls = {"selection": 0, "val": 0}
+    real_sel = Trainer.selection_metric
+    real_run = Trainer.run_epoch
+
+    def spy_sel(self, loader):
+        calls["selection"] += 1
+        return real_sel(self, loader)
+
+    def spy_run(self, loader, n_out, train, total_steps=1, split="train"):
+        if not train:
+            calls["val"] += 1
+        return real_run(self, loader, n_out, train, total_steps, split)
+
+    monkeypatch.setattr(Trainer, "selection_metric", spy_sel)
+    monkeypatch.setattr(Trainer, "run_epoch", spy_run)
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", True)
+    fit(cfg, model, small_mesh, tiny_cache, "cpu", tmp_path)
+    monkeypatch.setitem(loop_mod._PREEMPTED, "flag", False)
+
+    assert (tmp_path / "preempted.pt").exists(), "no checkpoint written on preemption"
+    assert calls["selection"] == 0 and calls["val"] == 0, (
+        "scoring ran before the preemption checkpoint -- on spot that loses the run")
+
+
+# --- finite-but-absurd loss guard --------------------------------------------------------
+
+def test_sustained_finite_but_absurd_losses_raise(tiny_cfg, small_mesh, tiny_cache,
+                                                  monkeypatch):
+    """THE phase-2c attempt-4 regression, magnitude edition. The destroyed model's train loss
+    was 3.69e23 -- FINITE in fp32, so the non-finite guards never applied to it, and the run
+    burned ~$9 at 100% GPU. The onset trace goes 0.219 -> 63.9 -> 3.0e8 in four steps, so a
+    sustained 100x-median loss IS a diverged model and must abort."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    tr._absurd_arm = 3  # tiny loader: arm early instead of after 20 batches
+    real_loss = tr._loss
+    calls = {"n": 0}
+
+    def runaway(pred, tgt, ovf):
+        calls["n"] += 1
+        obj, clean, parts = real_loss(pred, tgt, ovf)
+        if calls["n"] > 3:
+            return obj * 1e6, clean * 1e6, parts
+        return obj, clean, parts
+
+    monkeypatch.setattr(tr, "_loss", runaway)
+    with pytest.raises(RuntimeError, match="finite-but-absurd"):
+        tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+
+
+def test_isolated_finite_but_absurd_loss_is_tolerated(tiny_cfg, small_mesh, tiny_cache,
+                                                      monkeypatch):
+    """The counterpart: one 1e6x spike is a corrupt batch, not a divergence. It is skipped
+    (a 1e6x loss step would nuke the weights), counted, and the run continues. The spike must
+    NOT enter the running median, or the guard would go blind to everything after it."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    tr._absurd_arm = 3
+    real_loss = tr._loss
+    calls = {"n": 0}
+
+    def spike(pred, tgt, ovf):
+        calls["n"] += 1
+        obj, clean, parts = real_loss(pred, tgt, ovf)
+        if calls["n"] == 5:
+            return obj * 1e6, clean * 1e6, parts
+        return obj, clean, parts
+
+    monkeypatch.setattr(tr, "_loss", spike)
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+    assert out["bad_loss"] == 1 and out["skipped"] == 0
+    assert np.isfinite(out["loss"]), "one absurd batch poisoned the epoch average"
+
+
+def test_healthy_epoch_reports_no_absurd_losses(tiny_cfg, small_mesh, tiny_cache):
+    """The guard must not fire on ordinary loss noise: healthy training fluctuates well
+    under 100x the running median."""
+    from wnca.data.dataset import make_loader
+
+    cfg, tr = _trainer(tiny_cfg, small_mesh, tiny_cache)
+    out = tr.run_epoch(make_loader(tiny_cache, "train", cfg, n_out=1, shuffle=False), 1, True, 10)
+    assert out["bad_loss"] == 0 and np.isfinite(out["loss"])
+
+
+# --- rolling mid-epoch checkpoints --------------------------------------------------------
+
+def test_rolling_checkpoint_written_mid_epoch(tiny_cfg, small_mesh, tiny_cache, tmp_path):
+    """2c diverged at step 11,103 of a 7,122-step epoch; the nearest resume point was ~4,000
+    steps back. ckpt_every_steps writes a rolling last.pt so a mid-epoch death loses minutes,
+    not an epoch. It must also stay out of `--resume auto`'s way (pattern best_*.pt)."""
+    import dataclasses
+
+    from wnca.train.loop import fit
+    from wnca.models.nca import build_model
+    from wnca.train.checkpoint import latest_checkpoint, load_checkpoint
+
+    cfg = dataclasses.replace(tiny_cfg, train=dataclasses.replace(
+        tiny_cfg.train, epochs=1, ckpt_every_steps=2))
+    model = build_model(cfg, small_mesh)
+    torch.nn.init.normal_(model.update.head.weight, std=0.01)
+    fit(cfg, model, small_mesh, tiny_cache, "cpu", tmp_path)
+
+    last = tmp_path / "last.pt"
+    assert last.exists(), "no rolling checkpoint written"
+    fresh = build_model(cfg, small_mesh)
+    opt = torch.optim.AdamW(fresh.parameters(), lr=cfg.train.lr)
+    blob = load_checkpoint(last, fresh, cfg, opt)
+    assert blob["step"] > 0 and "optimizer" in blob, "rolling checkpoint is not resumable"
+
+    latest = latest_checkpoint(tmp_path)
+    assert latest is not None and latest.name.startswith("best_"), (
+        f"--resume auto would pick up {latest.name}, not a selection checkpoint")

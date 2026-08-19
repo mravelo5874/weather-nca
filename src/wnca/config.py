@@ -131,6 +131,14 @@ class ModelConfig:
     # --- rollout semantics ---
     reseed_hidden: bool = True  # zero hidden channels between forecast windows
 
+    # Spectral-normalize the update MLP's hidden layers, so the composed sub-step map's gain
+    # is bounded by construction instead of depending on where the weight norm happens to
+    # drift. Phase 2c's divergence was exactly that drift crossing the recurrence's stability
+    # threshold (docs/cloud-compute-incidents.md, attempt 5). The head is NOT wrapped: it is
+    # zero-init, and spectral_norm's power iteration NaNs on an exactly-zero weight
+    # (verified empirically, torch 2.6). The head's norm is asserted on checkpoint load.
+    spectral_norm: bool = False
+
     grad_ckpt: bool = True  # recompute sub-steps in backward
 
     # --- control GNN only ---
@@ -283,6 +291,10 @@ class Config:
         # checkpoint in the project.
         if self.state.solar_forcing:
             payload["solar_forcing"] = True
+        if self.model.spectral_norm:
+            # Spectral norm reparametrizes `weight` (extra buffers, moved parameter), so the
+            # state-dict keys differ from a plain model even though the shapes do not.
+            payload["spectral_norm"] = True
         blob = json.dumps(payload, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:16]
 

@@ -55,7 +55,7 @@ for them — don't, unless a direct measurement (see Methodology) justifies it.
 ## Commands
 
 ```bash
-make test                    # unit tests, must stay under 60s (currently ~13s, 76 tests)
+make test                    # unit tests, must stay under 60s (currently ~25s, 172 tests)
 make smoke                   # full train -> eval cycle, n_sub=3, synthetic data, no network
 make cache     CONFIG=configs/phaseX.yaml   # resumable; safe to interrupt and re-run
 make benchmark CONFIG=configs/phaseX.yaml   # run before committing to a phase's compute

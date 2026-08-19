@@ -11,9 +11,9 @@ cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "=== [$(date -u +%H:%M:%S)] CACHE BUILD: $CONFIG ==="
-python3 -m wnca.cli cache --config "$CONFIG"
+python3 -u -m wnca.cli cache --config "$CONFIG"
 
 echo "=== [$(date -u +%H:%M:%S)] TRAINING: $CONFIG ==="
-python3 -m wnca.cli train --config "$CONFIG"
+python3 -u -m wnca.cli train --config "$CONFIG"
 
 echo "=== [$(date -u +%H:%M:%S)] DONE ==="

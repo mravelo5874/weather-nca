@@ -197,10 +197,15 @@ an RMS slope of ~9.2e-7/step from 0.0154, extrapolating to 0.1 at ~92,000 steps 
 
 ## Incidental findings
 
-- This environment's torch 2.6 ships the **legacy** `spectral_norm` (`weight_orig` /
-  `weight_u` / `weight_v`, power iteration in train mode only). Tests access `weight_orig`
-  accordingly; if torch is upgraded to the parametrization-based implementation, the two
-  attribute accesses in `tests/test_spectral_norm.py` need updating.
+- `spectral_norm` is the **legacy** implementation (`weight_orig` / `weight_u` / `weight_v`,
+  power iteration in train mode only), and the tests access `weight_orig` accordingly. This was
+  flagged as a risk if torch were upgraded to the parametrization-based implementation.
+  **Resolved: verified on torch 2.9.1** (the version the cloud instance runs) --
+  `nn.utils.spectral_norm` is still the legacy API there, producing identical state-dict keys
+  `['bias', 'weight_orig', 'weight_u', 'weight_v']`. `arch_hash` and checkpoint loading are
+  unaffected, and all 172 tests pass on 2.9.1 both locally and on the instance. The
+  parametrization-based version lives at `nn.utils.parametrizations.spectral_norm` and is a
+  separate opt-in.
 - The CLI's `--set` takes **space-separated** pairs under one flag
   (`--set a.b=1 c.d=2`); repeated `--set` flags silently keep only the last. A mistyped
   verification command briefly built an unneeded `era5_sub3` cache and two run dirs; all

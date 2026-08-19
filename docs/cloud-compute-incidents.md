@@ -21,7 +21,7 @@ offerings add cost and indirection without adding anything we need.
 | Provisioning | **on-demand** (`STANDARD`), not spot — see §4.1 |
 | Disk | 300 GB balanced persistent disk, 91 GB used |
 | Rate | ~$0.89/h |
-| OS / Python | Ubuntu deep-learning image, Python 3.10.12 |
+| OS / Python | Ubuntu 22.04.5 LTS; Python **3.12.13** in a venv at `~/venv` (was 3.10.12 -- see §4.6) |
 | PyTorch | 2.9.1+cu129 |
 | Data source | WeatherBench-2 zarr on GCS, streamed once into a local 64 GB float32 cache |
 
@@ -243,10 +243,28 @@ check artifact mtimes before concluding the run is stuck.
 Bucket *metadata* permission is not granted on the public WB2 bucket, though object reads work
 fine. Not a misconfiguration — test throughput by reading an object instead.
 
-### 4.6 Python version warnings
+### 4.6 Python version warnings -- FIXED
 
-The deep-learning image emits `FutureWarning`/version warnings on import. Benign; filter with
-`grep -vE 'Warning|warnings.warn'`.
+The image's Python 3.10.12 made `google-api-core` emit a `FutureWarning` on **every import**
+(Google drops 3.10 support on 2026-10-04), three lines at a time, in the middle of every
+training log. Benign, but they had to be grepped out to read anything, and the filter
+(`grep -vE 'Warning|warnings.warn'`) also hid warnings worth seeing.
+
+Fixed by `scripts/cloud_upgrade_python.sh`: Python **3.12.13** from deadsnakes into a venv at
+`~/venv`. Ubuntu 22.04's own `python3.11` candidate is `3.11.0~rc1` -- a release candidate, not
+something to run a 20-hour training job on -- which is why the PPA is used rather than the
+distro package. The script also moves off `pip install --user` into a real venv, so the
+interpreter and its packages can be replaced together next time. `run_phase.sh` prefers
+`~/venv/bin/python` automatically and falls back to `python3`.
+
+Verified after the upgrade: **0 python-version warnings** on `import gcsfs`, 172/172 tests pass,
+the existing 64 GB cache is reused unchanged (same tag `era5_sub5_c28_4313f3a8a7`, no rebuild),
+and smoke train+eval pass. Note this bumped every dependency as well (numpy 2.5.2, pandas 3.0.5,
+zarr 3.3.0, xarray 2026.7.0) -- which is why the cache read was checked explicitly rather than
+assumed.
+
+One warning remains and is **not** ours: torch 2.9's own DataLoader calls
+`Tensor.pin_memory(device)` internally, which it has deprecated. It will resolve upstream.
 
 ---
 

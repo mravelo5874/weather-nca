@@ -9,11 +9,15 @@ set -euo pipefail
 CONFIG="${1:?usage: run_phase.sh <config.yaml>}"
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/bin:$PATH"
+# Prefer the venv built by scripts/cloud_upgrade_python.sh (modern Python, no
+# google-api-core version warnings). Falls back to system python3 if absent.
+PY="${PY:-$( [ -x "$HOME/venv/bin/python" ] && echo "$HOME/venv/bin/python" || echo python3 )}"
+echo "interpreter: $($PY --version 2>&1) ($PY)"
 
 echo "=== [$(date -u +%H:%M:%S)] CACHE BUILD: $CONFIG ==="
-python3 -u -m wnca.cli cache --config "$CONFIG"
+"$PY" -u -m wnca.cli cache --config "$CONFIG"
 
 echo "=== [$(date -u +%H:%M:%S)] TRAINING: $CONFIG ==="
-python3 -u -m wnca.cli train --config "$CONFIG"
+"$PY" -u -m wnca.cli train --config "$CONFIG"
 
 echo "=== [$(date -u +%H:%M:%S)] DONE ==="

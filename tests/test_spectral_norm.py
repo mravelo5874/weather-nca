@@ -36,7 +36,7 @@ def test_spectral_norm_pins_hidden_layer_sigma(tiny_cfg, small_mesh):
     for _ in range(5):  # the power iteration converges over a few forwards
         model.update(perceived, cond)
     for i, layer in enumerate(model.update.layers):
-        sigma = float(torch.linalg.matrix_norm(layer.weight.float(), 2))
+        sigma = float(torch.linalg.matrix_norm(layer.weight.detach().float(), 2))
         assert sigma <= 1.0 + 0.05, f"layers.{i} sigma_max {sigma} is not pinned"
 
 

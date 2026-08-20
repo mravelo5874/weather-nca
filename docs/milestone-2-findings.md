@@ -3,7 +3,7 @@
 Recorded as phases complete. Everything here is measured on the local GTX 1660 Ti (6 GB) unless
 stated otherwise; re-measure on the cloud instance before budgeting.
 
-Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ (best model so far) · 2c diagnosed and pending · 2d–5 not started.**
+Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ · 2c ✅ (best model so far) · 2d–5 not started.**
 
 ---
 
@@ -425,7 +425,109 @@ Sending SIGTERM did not stop a run promptly. The handler breaks the training loo
 then runs the full validation pass **and** the selection metric before writing `preempted.pt`.
 It ran 3+ minutes without checkpointing. **Spot preemption gives ~30 seconds**, so the spot
 path cannot save in time as written — it must checkpoint immediately on the flag, before
-val/selection. Not yet fixed.
+val/selection. **Fixed** in the stability pass (`docs/phase2c-stability-fixes.md` §5):
+the loop now writes `preempted.pt` immediately after the training pass, before validation and
+the selection metric run at all. Spot provisioning is unblocked but was not used for the 2c run
+itself, which paid on-demand rates.
+
+---
+
+## 2c-r. The run that finished, and what 39 years bought
+
+Completed 2026-08-20 after the stability fixes: 8 epochs, 56,976 steps, 22 h 05 m on an L4 at
+bf16, ~$20, **zero non-finite or absurd batches**. Best selection metric 0.11257, improving
+monotonically at every epoch — every epoch saved a checkpoint.
+
+### The comparison, and the year it is measured in
+
+2c's own test split is **2020**; 2b/2b′/2b-pf were scored on **2018**. Reporting the ladder
+across different verification years would confound the data scale-up with a change of year, so
+2c was additionally evaluated on 2018 (its validation split). Both are recorded:
+
+| | 24 h | 120 h | 360 h |
+|---|---|---|---|
+| 2c, held-out test **2020** | **174.7** | 743.2 | 1474.6 |
+| 2c, val **2018** | 167.6 | 743.6 | 1475.8 |
+
+They agree to ~4% at 24 h and under 0.1% at 120 h and beyond. 2018 is *not* held out for 2c —
+it drove checkpoint selection — but that agreement bounds the selection bias, and the ladder
+below is therefore quoted on the common year.
+
+**z500 RMSE, test 2018, identical eval settings:**
+
+| lead | phase 0 | 2b | 2b-pf | **2c** | 2c vs 2b-pf |
+|---|---|---|---|---|---|
+| 6 h | 110.2 | 106.3 | 152.4 | 128.4 | −15.7% |
+| 12 h | 169.5 | 158.0 | 167.9 | **107.2** | −36.2% |
+| 24 h | 329.7 | 297.6 | 282.1 | **167.6** | **−40.6%** |
+| 48 h | 639.1 | 624.0 | 531.0 | **309.2** | −41.8% |
+| 72 h | 881.1 | 934.1 | 755.6 | **458.8** | −39.3% |
+| 120 h | 1231.8 | 1443.7 | 1085.1 | **743.6** | −31.5% |
+| 168 h | 1493.3 | 1862.0 | 1308.7 | **949.6** | −27.4% |
+| 360 h | 2208.5 | 3450.6 | 1860.5 | **1475.8** | −20.7% |
+
+Best at every lead from 12 h out. **6 h is still the weak point** (128.4 against 2b's 106.3) —
+the pushforward regression carries over, as expected: the model never sees a clean analysis
+during training. At 15 days it sits at 1.38× climatology, against 2b-pf's 1.74×.
+
+Skill against persistence stays positive to **~212 h (8.9 days)**; 2b crossed zero near 72 h.
+
+### The selection metric earned its widening
+
+`ckpt_windows` was raised 8 → 12 for this run on the strength of the 2b-pf lesson. It was the
+right call, and the run shows why directly:
+
+| | epoch 5 | epoch 8 | change |
+|---|---|---|---|
+| val loss (single step) | 0.02398 | 0.023723 | **−1.1%** |
+| selection (72 h rollout) | 0.13313 | 0.11257 | **−15.4%** |
+
+Single-step validation effectively stopped moving after epoch 5 while the rollout metric kept
+improving. An 8-window metric would have been sampling a signal that had largely gone flat, and
+checkpoint selection over the final epochs would have been close to arbitrary.
+
+### Perturbation growth lands inside the atmospheric band
+
+Sustained growth **×1.079 per 6 h → error-doubling time 2.28 days.** The synoptic atmosphere
+doubles in roughly 1.5–2.5 days.
+
+| model | sustained | doubling |
+|---|---|---|
+| phase 0 | ×1.033 | 5.34 d — over-damped |
+| 2b-pushforward | ×1.139 | 1.33 d — too fast |
+| **2c** | **×1.079** | **2.28 d — inside the band** |
+
+The first model in this ladder to sit inside it, and it is also the most accurate — which is
+further evidence for the growth–skill decoupling noted in 2b-pf.1. Note this still **fails exit
+criterion 5 as written** (≤1.05); 27/28 channels are above it. The criterion selects for
+over-damping and the amendment remains unadopted.
+
+### The one channel that is worse than doing nothing
+
+**2 m temperature: −31% at 24 h, −57% at 72 h, −90% at 120 h.** Every other channel beats
+persistence at 24 h. Solar forcing is *on* in this run, so either the conditioning is too weak
+to drive a field that swings on a 24 h period, or a 223 km mesh cannot resolve the land-surface
+contrast that sets it. Unresolved — and it means the 2b′ claim that "solar forcing is worth 19%
+on 2t" still has no support from a healthy model.
+
+### Not converged
+
+Train loss and the selection metric were both still falling at epoch 8 with no plateau. The
+8-epoch budget was set before it was known the model would train at all.
+
+### Caveats attached to this result
+
+1. **The two stability fixes are confounded** (spectral norm + weight decay 1e-5 → 0.1). Neither
+   is established as individually necessary.
+2. **n = 1.** No seeds, no variance estimate. Earlier phases moved ~5% run to run, far below the
+   41% here, but the error bars are unknown.
+3. **The environment changed too** — torch 2.6 → 2.9.1, Python 3.10 → 3.12, numpy 1.x → 2.5.2.
+   Not a plausible cause of a 41% skill change, but it is a real difference between the runs.
+4. **The thesis is still untested.** This shows a local rule scales with data; it does not show a
+   local rule is *sufficient*. That is phase 2d.
+
+Report: `media/phase2c_report.html` (`scripts/report_2c.py`); ladder figure regenerated by
+`scripts/plot_ladder.py`.
 
 ---
 

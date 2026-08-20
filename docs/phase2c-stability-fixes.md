@@ -224,12 +224,44 @@ an RMS slope of ~9.2e-7/step from 0.0154, extrapolating to 0.1 at ~92,000 steps 
   was gain in the composed map with ordinary-looking weights. Wrong mechanism.
 - **Resuming mid-epoch.** Resume granularity is still the epoch (see #4).
 
-## Before relaunching 2c
+## Outcome — the fixes held (2026-08-20)
 
-1. `make test` and `make smoke` on the instance (standing checklist).
-2. `scripts/diagnose.py --stages lr` — expect `sig0/step` ≈ flat, `onset~ inf`. A `RATCHET`
-   verdict now means something specific: the σ pin is not holding.
-3. Enable spot provisioning — the SIGTERM path now checkpoints inside the notice window —
-   with the outer watchdog from `cloud-setup.md`.
-4. `WNCA_GRAD_TRACE=1` for the first epoch, and confirm `‖layers.0.weight‖` (Frobenius) no
-   longer predicts anything — the σ pin, not the weight norm, is now the quantity to watch.
+2c ran to completion: 8 epochs, 56,976 steps, 22 h 05 m, **zero non-finite and zero
+finite-but-absurd batches**. Full results in `docs/milestone-2-findings.md` §2c-r.
+
+**Pre-launch probe.** `scripts/diagnose.py --stages lr` on the real config, 200 steps:
+
+| lr | grad trend | max gn | non-finite | `sig0/step` | verdict |
+|---|---|---|---|---|---|
+| 3.0e-4 | 1.7× | 1.48 | 0 | 5.52e-06 | ok |
+| 5.0e-4 | 1.9× | 2.31 | 0 | 3.60e-06 | ok |
+
+Against 4.23e+12 max grad norm and 287/500 non-finite at lr 1e-3 before the fix. The σ slope is
+~300× flatter than the pre-fix Frobenius ratchet of 1.745e-3/step — the pin holds.
+
+**The head, tracked through the run.** The reviewer's correction above said the head is an
+unbounded path held only by weight decay, and that "steps to 0.1" was still landing inside the
+schedule at the last check. Measured across the real run, the crossing estimate receded far
+faster than training advanced:
+
+| checked at step | head RMS | latest-window slope | extrapolated steps to 0.1 |
+|---|---|---|---|
+| 2,160 | 0.01336 | 3.51e-06 | 24,656 |
+| 5,010 | 0.02002 | 2.02e-06 | 39,528 |
+| 8,107 | 0.02540 | 1.57e-06 | 47,428 |
+| 47,378 | **0.04420** | **9.68e-08** | **576,435** |
+
+The head gained 0.0189 in its first 8k steps and 0.0007 in the last 7k — a 27× slowdown. It
+asymptotes; it does not ratchet. **The concern is resolved on the real architecture**, not just
+inferred from the tiny config. The 0.1 threshold was always a tiny-config proxy and remains one,
+but the run never approached it.
+
+**Guard behaviour.** The gradient guard fired exactly once in anger — on the attempt-5
+diagnostic resume, aborting after 143 non-finite gradients where attempt 4 had idled for ten
+hours. It did not fire during the real run. `ckpt_every_steps` wrote `last.pt` throughout and was
+never needed.
+
+**Still open.** The confound (fix #1 and #2 together) is unresolved by design and recorded above.
+Spot provisioning is unblocked by fix #5 but was **not used** — the run paid on-demand rates,
+because switching provisioning model requires recreating the VM and would have destroyed the
+64 GB cache.

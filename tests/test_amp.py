@@ -38,6 +38,56 @@ def test_perception_survives_autocast(tiny_cfg, small_mesh):
 
 
 @CUDA
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_control_gnn_message_passing_survives_autocast(tiny_cfg, small_mesh, forcing_for, dtype):
+    """The phase-2d regression. `index_add_` RAISES on mismatched scalar types rather than
+    promoting them, and on CUDA autocast sends the edge MLP's output to half/bf16 while
+    LayerNorm hands `h` back in fp32 -- so the accumulator must take the MESSAGE dtype, not
+    `h`'s. It bites from the second message-passing layer onward, once `h` has been through a
+    norm.
+
+    Must be a CUDA test: **CPU autocast keeps LayerNorm in bf16**, so h and m agree there and
+    the bug is invisible. A CPU version of this test passes with or without the fix.
+
+    The control GNN had never been executed when phase 2d was configured. This crashed on the
+    first training step and would have taken out an overnight cloud run.
+    """
+    import dataclasses
+
+    from wnca.models.nca import build_model
+
+    cfg = dataclasses.replace(
+        tiny_cfg, model=dataclasses.replace(tiny_cfg.model, kind="control_gnn"))
+    model = build_model(cfg, small_mesh, "cuda")
+    n = len(small_mesh["v"])
+    phys = torch.randn(2, n, cfg.c_phys, device="cuda")
+    static = torch.randn(2, n, cfg.state.c_static, device="cuda")
+    forcing = forcing_for(cfg, small_mesh, 2, 1)[:, 0].cuda()
+    with torch.autocast("cuda", dtype=dtype):
+        out = model.forecast_step(model.seed(phys), static, forcing=forcing)
+    assert torch.isfinite(out).all()
+    assert out.shape[:2] == (2, n)
+
+
+def test_phase2d_control_is_parameter_matched_to_phase2c():
+    """2d is only interpretable at a matched budget, and the shipped config was **1.67x** the
+    NCA's parameter count -- the gate written in its own header had never been applied. This
+    asserts the two real configs stay inside 10% of each other, so an edit to either one that
+    breaks the match fails here instead of silently producing an uninterpretable experiment.
+    """
+    from wnca.config import load_config
+    from wnca.mesh.icosphere import build_mesh
+    from wnca.models.nca import build_model
+
+    nca_cfg = load_config("configs/phase2c_full.yaml")
+    gnn_cfg = load_config("configs/phase2d_control.yaml")
+    mesh = build_mesh(nca_cfg, verbose=False)
+    n = lambda c: sum(p.numel() for p in build_model(c, mesh, "cpu").parameters())  # noqa: E731
+    a, b = n(nca_cfg), n(gnn_cfg)
+    assert abs(b / a - 1) < 0.10, f"2d is {b / a:.2f}x phase 2c ({b:,} vs {a:,} params)"
+
+
+@CUDA
 def test_band_filters_survive_autocast(small_mesh, tiny_cfg):
     """The phase 3b spectral loss path."""
     from wnca.mesh.operators import laplacian_matrix

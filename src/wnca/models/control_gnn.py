@@ -61,7 +61,12 @@ class MessagePassingLayer(nn.Module):
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:  # [B, N, H]
         m = self.edge_mlp(torch.cat([h[:, self.src], h[:, self.dst]], dim=-1))  # [B, E, H]
-        agg = torch.zeros_like(h).index_add_(1, self.dst, m) * self.inv_deg
+        # The accumulator must match the MESSAGE dtype, not `h`'s. Under autocast the edge MLP
+        # returns half/bf16 while `h` comes back from LayerNorm in fp32, and `index_add_`
+        # requires both operands to share a scalar type -- it raises rather than promoting.
+        # Multiplying by the fp32 `inv_deg` then promotes the mean back to fp32, which is where
+        # the aggregation wants to be anyway.
+        agg = torch.zeros_like(h, dtype=m.dtype).index_add_(1, self.dst, m) * self.inv_deg
         return self.norm(h + self.node_mlp(torch.cat([h, agg], dim=-1)))
 
 

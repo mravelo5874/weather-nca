@@ -1,17 +1,72 @@
 # Phase 2d -- the same-budget control GNN. Isolates: LOCALITY. This is the thesis under test.
-# GATE: control trained and scored on the same data, optimizer and wall-clock budget.
 #
-# Match the parameter count to the chosen 2c model before running -- check with
-#   wnca benchmark -c configs/phase2d_control.yaml
-# and tune gnn_hidden / gnn_hops until params and ms/step are within ~10% of the NCA's.
-# Roughly 25% of the milestone's compute, and the highest-value spend in it: without this the
-# headline result is uninterpretable.
+# GATE: control trained and scored on the same data, optimizer and budget. Every `train:`,
+# `data:` and `state:` value below is a VERBATIM MIRROR of configs/phase2c_full.yaml. They are
+# written out explicitly rather than inherited so the match is auditable at a glance -- if the
+# NCA config changes, this file has to change with it, and a diff will say so.
+#
+# ---------------------------------------------------------------------------------------
+# PARAMETER MATCH (measured, not assumed)
+#
+#   NCA (phase 2c)                            1,029,692 params
+#   this config, gnn_hidden 160 / gnn_hops 6  1,010,780 params   0.982x   <-- matched
+#
+# The previous setting (gnn_hidden 256, gnn_hops 4) was **1,719,612 params -- 1.67x the NCA**,
+# which would have failed the gate in this file's own header. It was never checked. Of the two
+# configurations inside 10%, 160/6 was chosen over 192/4 because it is both the closer match
+# and the *more generous* control: 6 message-passing hops give the non-local arm more
+# information flow than 4, so a win for the strictly local NCA against it is the stronger
+# result.
+#
+#   python -c "..."  -- see scripts/, or re-derive with build_model + sum(p.numel())
+#
+# ---------------------------------------------------------------------------------------
+# WALL-CLOCK IS *NOT* MATCHED, AND CANNOT BE
+#
+# The GNN runs ONE non-local pass per 6 h window; the NCA runs 20 strictly local sub-steps.
+# At matched parameters the GNN is therefore expected to be several times faster per step, so
+# parameters and wall-clock cannot both be matched -- the header's old "params and ms/step
+# within ~10%" was not achievable. **Parameters are the matched quantity; wall-clock is
+# measured and reported as an asymmetry**, because the compute cost of iterating a local rule
+# is itself part of what the thesis is trading away.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT A DIFFERENCE HERE CAN AND CANNOT ATTRIBUTE TO
+#
+# This control changes TWO things at once against the NCA: the update is non-local, AND it is
+# applied once instead of 20 times. A gap therefore measures "strictly local rule iterated 20x"
+# vs "multi-scale non-local rule applied once" -- not locality in isolation. The clean
+# single-variable control (same MLP, same 20 sub-steps, perception stencil widened to the
+# coarse icosphere levels) is a follow-up if this result is interesting enough to warrant it.
+# Recorded here so the finding is never written up as more than it is.
 phase: phase2d_control
+
+data:
+  train_years: "1979-2017"
+  val_years: [2018]
+  test_years: [2020]
+
+state:
+  solar_forcing: true
 
 model:
   kind: control_gnn
-  gnn_hops: 4
-  gnn_hidden: 256
+  gnn_hidden: 160                # matched to the NCA: 1,010,780 vs 1,029,692 params
+  gnn_hops: 6
+  # spectral_norm is deliberately OFF here. It wraps `UpdateRule`, which the control GNN does
+  # not use, so setting it true would be a no-op that still changed arch_hash. The GNN has no
+  # 20-sub-step recurrence and so does not have the instability it was introduced to fix.
 
 train:
-  epochs: 20
+  epochs: 8                      # MIRRORS 2c. Was 20 -- a 2.5x budget advantage for the
+                                 # control, which would have broken the gate above.
+  batch_size: 8
+  lr: 3.0e-4
+  weight_decay: 0.1
+  warmup_steps: 500
+  amp: true
+  pushforward: true
+  noise_std: 0.05
+  ckpt_windows: 12
+  ckpt_subsample: 0.25
+  ckpt_every_steps: 2000

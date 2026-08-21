@@ -31,19 +31,51 @@
 # coarse-icosphere shortcuts it applies to every node uniformly.
 #
 # ---------------------------------------------------------------------------------------
+# MEASURED PROPERTIES (scripts/measure_reach.py, and a timing probe)
+#
+#   params        dilation 1 and 8: 1,060,412 (identical) | phase 2c: 1,029,692 (+3.0%)
+#   reach/window  dilation 1: 20 hops (= 2c) | dilation 8: 160 hops
+#   mesh diameter ~93 hops, so dilation 8 is 1.7x the diameter -- effectively GLOBAL within a
+#                 single 6 h window. This is deliberately the most generous non-local arm
+#                 available, which is what makes a loss for it strong evidence.
+#   wall-clock    dilation 1 and 8: 1.10x phase 2c per window, and identical to each other
+#                 (1.097x vs 1.102x measured). So the d=1 vs d=8 comparison is matched on
+#                 parameters AND compute; only the 2c reference carries the +10%.
+#
+# ---------------------------------------------------------------------------------------
 # HOW TO READ THE RESULT
 #
 # The thesis is "a strictly local update rule is ENOUGH". The falsification test is to hand the
-# model strictly more information and see whether it uses it:
+# model strictly more information and see whether it uses it. **The comparison that carries the
+# result is d=8 vs d=1**, because those two arms differ in reach and nothing else -- same
+# parameters, same compute, same everything. Phase 2c is a free reference point, not the
+# control.
 #
-#   dilation 8 does NOT beat phase 2c  ->  locality was sufficient. Note this arm has 3% MORE
-#                                          parameters than 2c, so the confound runs against
-#                                          this conclusion, which makes it conservative.
-#   dilation 8 DOES beat phase 2c      ->  locality is costing accuracy. Then run the
-#                                          dilation-1 arm to separate reach from the extra
-#                                          parameters, since it is parameter-identical to 8.
+#   d=8 does not beat d=1  ->  locality was sufficient, at this data and budget.
+#   d=8 beats d=1          ->  reach buys accuracy; locality is costing something.
 #
-# So the dilation-1 control is only needed if dilation 8 wins. Queue 8 first.
+# BOTH arms are run unconditionally. An earlier version gated d=1 on a d=8 win, on the argument
+# that d=8's extra 3% of parameters made a d=8 loss "conservative". That argument was wrong: at
+# fixed data and epochs more parameters can just as easily HURT -- 30,720 extra input weights to
+# fit and one more channel the MLP must learn to ignore -- so the sign of that confound is
+# unknown, not favourable. Gating d=1 would have left the thesis-CONFIRMING branch resting on an
+# unverified assumption that the fifth group is neutral, which is the original 2d mistake in
+# miniature.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS STILL DOES NOT TEST
+#
+# * **The long-range channel is isotropic.** `mean(ring) - centre` is a scalar diffusion
+#   operator; the local stencil additionally hands the model direction via grad-x and grad-y.
+#   Composition with those local directional operators over 20 sub-steps recovers some
+#   directionality, but strictly this asks "does isotropic long-range information help?" If d=8
+#   loses, the honest headline is "locality sufficient relative to isotropic long-range
+#   diffusion". A directional ring gradient -- grad-x/grad-y assembled over ring edges, two more
+#   groups by the same construction -- is the natural follow-up.
+# * **Where the threshold is.** d=8 is the far extreme. A d=8 win says reach matters but not at
+#   what radius; d=2 (0.43x diameter) and d=4 (0.86x) would map the gradient of the effect and
+#   stop a win-branch write-up implying that global attention is necessary.
+#
 phase: phase2d_dilated
 
 # --- everything below is a verbatim mirror of configs/phase2c_full.yaml ---------------------

@@ -76,7 +76,8 @@ def apply_edge_op(f: np.ndarray, edges: np.ndarray, coeff: np.ndarray, N: int) -
     return out
 
 
-def dilated_ring_edges(edges: np.ndarray, N: int, hops: int, fanout: int = 6) -> np.ndarray:
+def dilated_ring_edges(edges: np.ndarray, verts: np.ndarray, hops: int,
+                       fanout: int = 6) -> np.ndarray:
     """Edges from every node to `fanout` nodes at EXACTLY `hops` graph distance.
 
     The point is a stencil with the same fan-out as the 1-hop one -- 6 neighbours, just further
@@ -89,12 +90,18 @@ def dilated_ring_edges(edges: np.ndarray, N: int, hops: int, fanout: int = 6) ->
     holds nodes reached at exactly step k, `seen` everything reached so far, and the next
     frontier is `A @ frontier` minus `seen`.
 
-    The ring at radius d holds ~6d nodes, so it is subsampled to `fanout` by taking evenly
-    spaced entries of each row's sorted index list. Deterministic, and it keeps the operator's
-    cost independent of `hops`.
+    The ring at radius d holds ~6d nodes, so it is subsampled to `fanout`. The subsample is
+    taken **evenly in azimuth around the centre**, not evenly in vertex index: icosphere indices
+    follow subdivision order (the 12 original vertices, then edge midpoints appended face by
+    face), so index order carries no spatial meaning. Measured, index-order subsampling left a
+    mean azimuthal max-gap of 117-122 degrees against the 60 of six evenly spread points, and
+    left an entire hemisphere unsampled for 2-3% of nodes -- an arbitrary anisotropic stencil
+    that varies node to node, not the ring mean the operator is supposed to be.
     """
     if hops < 1:
         raise ValueError(f"hops must be >= 1, got {hops}")
+    N = len(verts)
+    vn = verts / np.linalg.norm(verts, axis=1, keepdims=True)
     A = sp.coo_matrix((np.ones(len(edges), dtype=bool), (edges[:, 0], edges[:, 1])),
                       shape=(N, N)).tocsr()
     A = ((A + A.T) > 0).tocsr()                       # symmetric, boolean
@@ -115,15 +122,28 @@ def dilated_ring_edges(edges: np.ndarray, N: int, hops: int, fanout: int = 6) ->
         cols = frontier.indices[frontier.indptr[i]:frontier.indptr[i + 1]]
         if len(cols) == 0:
             continue
-        cols = np.sort(cols)
-        pick = np.unique(
-            cols[np.linspace(0, len(cols) - 1, min(fanout, len(cols))).round().astype(int)])
+        if len(cols) > fanout:
+            # Order the ring by azimuth in the tangent plane at the centre, then take evenly
+            # spaced entries of THAT order, so the stencil is spread around the centre.
+            pc = vn[i]
+            ref = np.array([0.0, 0.0, 1.0]) if abs(pc[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+            e1 = ref - (ref @ pc) * pc
+            e1 /= np.linalg.norm(e1)
+            e2 = np.cross(pc, e1)
+            t = vn[cols] - np.outer(vn[cols] @ pc, pc)
+            t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-12)
+            cols = cols[np.argsort(np.arctan2(t @ e2, t @ e1))]
+            pick = np.unique(cols[np.linspace(0, len(cols), fanout, endpoint=False)
+                                  .round().astype(int) % len(cols)])
+        else:
+            pick = np.unique(cols)
         neighbour.extend(int(j) for j in pick)
         centre.extend([i] * len(pick))
     return np.stack([np.asarray(neighbour), np.asarray(centre)], axis=1)
 
 
-def dilated_laplacian(edges: np.ndarray, N: int, hops: int, fanout: int = 6) -> sp.csr_matrix:
+def dilated_laplacian(edges: np.ndarray, verts: np.ndarray, hops: int,
+                      fanout: int = 6) -> sp.csr_matrix:
     """Uniform-weight diffusion operator over the `hops`-radius ring: mean(ring) - centre.
 
     Deliberately uniform rather than cotangent-weighted: at radius > 1 there is no triangle to
@@ -131,7 +151,8 @@ def dilated_laplacian(edges: np.ndarray, N: int, hops: int, fanout: int = 6) -> 
     not to approximate a specific differential. At `hops=1` it is a plain graph Laplacian, which
     makes `perception_dilation: 1` a parameter-matched control that adds no reach.
     """
-    ring = dilated_ring_edges(edges, N, hops, fanout)
+    N = len(verts)
+    ring = dilated_ring_edges(edges, verts, hops, fanout)
     # Normalise by each CENTRE's fan-out (column 1), so every row averages its own ring. Using
     # column 0 would weight by the neighbour's in-degree, which varies 0-48 and is not the
     # quantity being averaged.

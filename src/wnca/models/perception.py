@@ -49,7 +49,7 @@ class MeshPerception(nn.Module):
         # the coarse level.
         self.register_buffer(
             "dil",
-            _to_torch_sparse(dilated_laplacian(mesh["edges"], n, self.dilation, fanout))
+            _to_torch_sparse(dilated_laplacian(mesh["edges"], mesh["v"], self.dilation, fanout))
             if self.dilation else None)
 
     def _apply_op(self, op: torch.Tensor, x: torch.Tensor) -> torch.Tensor:

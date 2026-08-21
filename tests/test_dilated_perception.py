@@ -48,7 +48,7 @@ def test_ring_is_a_proper_averaging_laplacian(small_mesh):
     centre's fan-out, producing a valid-looking but wrongly weighted operator."""
     n = len(small_mesh["v"])
     for hops in (1, 2, 3):
-        L = dilated_laplacian(small_mesh["edges"], n, hops).tocsr()
+        L = dilated_laplacian(small_mesh["edges"], small_mesh["v"], hops).tocsr()
         off = L.copy()
         off.setdiag(0)
         off.eliminate_zeros()
@@ -63,7 +63,7 @@ def test_ring_fanout_is_constant_and_uniform_across_nodes(small_mesh):
     level, which is why stacking them reaches less far than the local model."""
     n = len(small_mesh["v"])
     for hops in (1, 2, 3):
-        ring = dilated_ring_edges(small_mesh["edges"], n, hops, fanout=6)
+        ring = dilated_ring_edges(small_mesh["edges"], small_mesh["v"], hops, fanout=6)
         fan = np.bincount(ring[:, 1], minlength=n)
         assert fan.max() <= 6
         assert fan.min() >= 5, f"hops={hops}: some node has fan-out {fan.min()}"
@@ -90,12 +90,48 @@ def test_ring_members_sit_at_exactly_the_requested_distance(small_mesh):
         return d
 
     for hops in (2, 3):
-        ring = dilated_ring_edges(small_mesh["edges"], n, hops, fanout=6)
+        ring = dilated_ring_edges(small_mesh["edges"], small_mesh["v"], hops, fanout=6)
         for centre in (0, 17, 100):
             members = ring[ring[:, 1] == centre][:, 0]
             d = bfs(centre)
             assert all(d[j] == hops for j in members), \
                 f"hops={hops}, centre={centre}: got distances {sorted({d[j] for j in members})}"
+
+
+def test_ring_subsample_is_spread_around_the_centre(small_mesh):
+    """The subsample must be even in AZIMUTH, not in vertex index.
+
+    Icosphere indices follow subdivision order -- the 12 original vertices, then edge midpoints
+    appended face by face -- so index order carries no spatial meaning. Subsampling by index
+    (the first implementation) gave a mean azimuthal max-gap of 117-122 degrees on the n_sub=5
+    mesh against the 60 of six evenly spread points, and left a whole hemisphere unsampled for
+    2-3% of nodes: an arbitrary anisotropic stencil varying node to node, not the ring mean the
+    operator claims to be. Azimuth ordering brings it to ~65 degrees and 0%.
+    """
+    v = small_mesh["v"]
+    vn = v / np.linalg.norm(v, axis=1, keepdims=True)
+    n = len(v)
+
+    def max_gap_deg(centre, members):
+        p = vn[centre]
+        ref = np.array([0.0, 0.0, 1.0]) if abs(p[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        e1 = ref - (ref @ p) * p
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(p, e1)
+        t = vn[members] - np.outer(vn[members] @ p, p)
+        t /= np.linalg.norm(t, axis=1, keepdims=True)
+        a = np.sort(np.arctan2(t @ e2, t @ e1))
+        return np.degrees(np.diff(np.concatenate([a, [a[0] + 2 * np.pi]])).max())
+
+    ring = dilated_ring_edges(small_mesh["edges"], v, 3, fanout=6)
+    by_centre = {}
+    for j, i in ring:
+        by_centre.setdefault(int(i), []).append(int(j))
+    gaps = [max_gap_deg(c, m) for c, m in by_centre.items() if len(m) >= 5]
+    assert gaps, "no centre had enough ring members to test"
+    mean_gap = float(np.mean(gaps))
+    assert mean_gap < 100.0, f"ring subsample is clustered: mean azimuthal gap {mean_gap:.0f}deg"
+    assert max(gaps) < 180.0, "some node has an entire hemisphere unsampled"
 
 
 # --------------------------------------------------------------------------------- the model ---

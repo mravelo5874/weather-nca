@@ -37,7 +37,7 @@ class UpdateRule(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.stochastic = cfg.model.stochastic
-        in_dim = 4 * cfg.c_state + cfg.c_cond
+        in_dim = cfg.n_perception_groups * cfg.c_state + cfg.c_cond
         h, n = cfg.model.hidden_dim, cfg.model.n_layers
 
         self.layers = nn.ModuleList(

@@ -1,0 +1,77 @@
+# Phase 2d-dilated -- the MINIMAL-DELTA locality control. Isolates: LOCALITY, and only that.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS EXISTS ALONGSIDE phase2d_control.yaml
+#
+# The GNN control changes four things at once against the NCA -- locality, iteration count
+# (1 pass vs 20 sub-steps), weight sharing (6 distinct stacks vs one shared MLP), and input
+# featurisation (the NCA is handed grad-x, grad-y and the Laplacian from fixed geometry; the
+# GNN must infer differential structure from raw neighbour values). Worse, its receptive field
+# was MEASURED (scripts/measure_reach.py) at 9 fine-mesh hops per window against the strictly
+# local NCA's 20: the "non-local" arm moved information less far than the arm it controls for,
+# at every available gnn_levels setting. A loss there is attributable to reach, not topology.
+#
+# This config changes exactly ONE thing against phase2c_full.yaml: perception gains a fifth
+# group, the mean over the ring at exactly `perception_dilation` hops minus the centre. Same
+# update MLP, same 20 sub-steps, same weight sharing, same free differential features, same
+# optimizer, same data. Only how far each sub-step can see.
+#
+# ---------------------------------------------------------------------------------------
+# THE TWO ARMS, AND WHY THEY ARE EXACTLY COMPARABLE
+#
+#   perception_dilation: 1   five groups; the ring at 1 hop carries NO extra reach
+#   perception_dilation: 8   five groups; each sub-step reaches 8 hops
+#
+#   params, both arms   1,060,412        (phase 2c, four groups: 1,029,692)
+#   measured reach      2 sub-steps x dilation, i.e. 20 vs 160 hops at n_substeps 20
+#
+# The arms are **parameter-identical**, so a difference between them is reach and nothing
+# else. The ring is subsampled to a 6-neighbour fan-out -- the same as the local stencil -- so
+# the extra operator is one sparse matmul of constant size whatever the radius, and unlike
+# coarse-icosphere shortcuts it applies to every node uniformly.
+#
+# ---------------------------------------------------------------------------------------
+# HOW TO READ THE RESULT
+#
+# The thesis is "a strictly local update rule is ENOUGH". The falsification test is to hand the
+# model strictly more information and see whether it uses it:
+#
+#   dilation 8 does NOT beat phase 2c  ->  locality was sufficient. Note this arm has 3% MORE
+#                                          parameters than 2c, so the confound runs against
+#                                          this conclusion, which makes it conservative.
+#   dilation 8 DOES beat phase 2c      ->  locality is costing accuracy. Then run the
+#                                          dilation-1 arm to separate reach from the extra
+#                                          parameters, since it is parameter-identical to 8.
+#
+# So the dilation-1 control is only needed if dilation 8 wins. Queue 8 first.
+phase: phase2d_dilated
+
+# --- everything below is a verbatim mirror of configs/phase2c_full.yaml ---------------------
+data:
+  train_years: "1979-2017"
+  val_years: [2018]
+  test_years: [2020]
+
+state:
+  solar_forcing: true
+
+model:
+  hidden_dim: 512
+  n_layers: 4
+  n_substeps: 20
+  dt: 0.05
+  spectral_norm: true
+  perception_dilation: 8         # <- THE ONLY DIFFERENCE. 1 for the parameter-matched control.
+
+train:
+  epochs: 8
+  batch_size: 8
+  lr: 3.0e-4
+  weight_decay: 0.1
+  warmup_steps: 500
+  amp: true
+  pushforward: true
+  noise_std: 0.05
+  ckpt_windows: 12
+  ckpt_subsample: 0.25
+  ckpt_every_steps: 2000

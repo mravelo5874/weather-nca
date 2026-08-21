@@ -76,6 +76,70 @@ def apply_edge_op(f: np.ndarray, edges: np.ndarray, coeff: np.ndarray, N: int) -
     return out
 
 
+def dilated_ring_edges(edges: np.ndarray, N: int, hops: int, fanout: int = 6) -> np.ndarray:
+    """Edges from every node to `fanout` nodes at EXACTLY `hops` graph distance.
+
+    The point is a stencil with the same fan-out as the 1-hop one -- 6 neighbours, just further
+    away -- so reach can be varied at essentially no cost and, unlike the coarse icosphere
+    levels used by the control GNN, **uniformly for every node**. A coarse level's edges only
+    connect the nodes that exist at that level (level 1 holds 42 of 10,242), which is why
+    stacking those levels reaches less far than the local model it was meant to control for.
+
+    Rings are grown by boolean sparse frontier expansion rather than per-node BFS: `frontier`
+    holds nodes reached at exactly step k, `seen` everything reached so far, and the next
+    frontier is `A @ frontier` minus `seen`.
+
+    The ring at radius d holds ~6d nodes, so it is subsampled to `fanout` by taking evenly
+    spaced entries of each row's sorted index list. Deterministic, and it keeps the operator's
+    cost independent of `hops`.
+    """
+    if hops < 1:
+        raise ValueError(f"hops must be >= 1, got {hops}")
+    A = sp.coo_matrix((np.ones(len(edges), dtype=bool), (edges[:, 0], edges[:, 1])),
+                      shape=(N, N)).tocsr()
+    A = ((A + A.T) > 0).tocsr()                       # symmetric, boolean
+    seen = (A + sp.eye(N, dtype=bool, format="csr")) > 0
+    frontier = A.copy()
+    for _ in range(hops - 1):
+        nxt = ((A @ frontier) > 0).tocsr()
+        frontier = (nxt > seen).tocsr()                # exactly one hop further
+        seen = ((seen + nxt) > 0).tocsr()
+        if frontier.nnz == 0:                          # ring ran off the end of the mesh
+            break
+
+    frontier = frontier.tocsr()
+    # `edge_op_matrix` reads column 0 as the SOURCE (the neighbour supplying the value) and
+    # column 1 as the DESTINATION (the centre node being updated), assembling A[dst, src].
+    neighbour, centre = [], []
+    for i in range(N):
+        cols = frontier.indices[frontier.indptr[i]:frontier.indptr[i + 1]]
+        if len(cols) == 0:
+            continue
+        cols = np.sort(cols)
+        pick = np.unique(
+            cols[np.linspace(0, len(cols) - 1, min(fanout, len(cols))).round().astype(int)])
+        neighbour.extend(int(j) for j in pick)
+        centre.extend([i] * len(pick))
+    return np.stack([np.asarray(neighbour), np.asarray(centre)], axis=1)
+
+
+def dilated_laplacian(edges: np.ndarray, N: int, hops: int, fanout: int = 6) -> sp.csr_matrix:
+    """Uniform-weight diffusion operator over the `hops`-radius ring: mean(ring) - centre.
+
+    Deliberately uniform rather than cotangent-weighted: at radius > 1 there is no triangle to
+    take a cotangent from, and the operator's job here is to carry information a fixed distance,
+    not to approximate a specific differential. At `hops=1` it is a plain graph Laplacian, which
+    makes `perception_dilation: 1` a parameter-matched control that adds no reach.
+    """
+    ring = dilated_ring_edges(edges, N, hops, fanout)
+    # Normalise by each CENTRE's fan-out (column 1), so every row averages its own ring. Using
+    # column 0 would weight by the neighbour's in-degree, which varies 0-48 and is not the
+    # quantity being averaged.
+    deg = np.bincount(ring[:, 1], minlength=N).astype(np.float64)
+    coeff = 1.0 / np.maximum(deg[ring[:, 1]], 1.0)
+    return edge_op_matrix(ring, coeff, N)
+
+
 def edge_op_matrix(edges: np.ndarray, coeff: np.ndarray, N: int) -> sp.csr_matrix:
     """Assemble `out[i] = sum_j coeff_ij (f_j - f_i)` as a sparse [N, N] matrix.
 

@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from ..mesh.operators import edge_op_matrix
+from ..mesh.operators import dilated_laplacian, edge_op_matrix
 
 
 def _to_torch_sparse(A) -> torch.Tensor:
@@ -35,12 +35,22 @@ class MeshPerception(nn.Module):
     is. Direct measurement over clever measurement, per the standing methodology note.
     """
 
-    def __init__(self, mesh: dict[str, np.ndarray]):
+    def __init__(self, mesh: dict[str, np.ndarray], dilation: int = 0, fanout: int = 6):
         super().__init__()
         n = len(mesh["v"])
         self.n_nodes = n
+        self.dilation = int(dilation)
         for name in ("gx", "gy", "lap"):
             self.register_buffer(name, _to_torch_sparse(edge_op_matrix(mesh["edges"], mesh[name], n)))
+        # Optional fifth group: mean over the ring at exactly `dilation` hops, minus the
+        # centre. Same 6-neighbour fan-out as the local stencil, so it costs one more sparse
+        # matmul of the same size regardless of radius -- and it applies uniformly to every
+        # node, unlike coarse-icosphere shortcuts which only connect the nodes that exist at
+        # the coarse level.
+        self.register_buffer(
+            "dil",
+            _to_torch_sparse(dilated_laplacian(mesh["edges"], n, self.dilation, fanout))
+            if self.dilation else None)
 
     def _apply_op(self, op: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """Apply an [N, N] sparse operator to [B, N, C] by folding B and C into the dense side."""
@@ -56,8 +66,8 @@ class MeshPerception(nn.Module):
         # -- the other ~80%, and dense -- still gets the tensor cores.
         with torch.autocast(device_type=x.device.type, enabled=False):
             xf = x.float()
-            return torch.cat(
-                [xf, self._apply_op(self.gx, xf), self._apply_op(self.gy, xf),
-                 self._apply_op(self.lap, xf)],
-                dim=-1,
-            )
+            groups = [xf, self._apply_op(self.gx, xf), self._apply_op(self.gy, xf),
+                      self._apply_op(self.lap, xf)]
+            if self.dil is not None:
+                groups.append(self._apply_op(self.dil, xf))
+            return torch.cat(groups, dim=-1)

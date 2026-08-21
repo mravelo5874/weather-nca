@@ -179,7 +179,7 @@ def _expand(x: torch.Tensor, M: int) -> torch.Tensor:
 def build_model(cfg: Config, mesh, device: str = "cpu") -> nn.Module:
     """Construct the model named by `cfg.model.kind`."""
     if cfg.model.kind == "nca":
-        return WeatherNCA(cfg, MeshPerception(mesh)).to(device)
+        return WeatherNCA(cfg, MeshPerception(mesh, cfg.model.perception_dilation)).to(device)
     if cfg.model.kind == "control_gnn":
         from .control_gnn import ControlGNN
 

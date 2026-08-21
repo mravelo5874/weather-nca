@@ -141,6 +141,16 @@ class ModelConfig:
 
     grad_ckpt: bool = True  # recompute sub-steps in backward
 
+    # Radius, in mesh hops, of an EXTRA perception group: a uniform diffusion operator over
+    # the ring at exactly this distance, with the same 6-neighbour fan-out as the local
+    # stencil. 0 disables it (the phase-2c architecture, 4 groups). This is the knob for the
+    # minimal-delta locality control: at `1` it adds a group that carries no extra reach, so
+    # it is the parameter-matched baseline; at `8` each sub-step reaches 8 hops instead of 1
+    # and a 20-sub-step window reaches 160 hops instead of 20. Everything else -- the update
+    # MLP, weight sharing, sub-step count, featurisation -- is untouched, which is what makes
+    # it a single-variable test of locality where the control GNN is not.
+    perception_dilation: int = 0
+
     # --- control GNN only ---
     # How many icosphere levels the message passing may use. Level L's edges span 2^(n_sub-L)
     # fine-mesh hops, and layers cycle coarse-to-fine, so this sets the control's REACH:
@@ -274,6 +284,11 @@ class Config:
     def cache_dir(self) -> Path:
         return Path(self.data.cache_dir)
 
+    @property
+    def n_perception_groups(self) -> int:
+        """[identity, grad_x, grad_y, laplacian] plus the dilated ring when enabled."""
+        return 4 + (1 if self.model.perception_dilation else 0)
+
     def arch_hash(self) -> str:
         """Fingerprint of everything that fixes a parameter shape.
 
@@ -299,6 +314,9 @@ class Config:
         # checkpoint in the project.
         if self.state.solar_forcing:
             payload["solar_forcing"] = True
+        if self.model.perception_dilation:
+            # Adds a perception group, so the update MLP's input width changes.
+            payload["perception_dilation"] = self.model.perception_dilation
         if self.model.kind == "control_gnn" and self.model.gnn_levels != 3:
             # The per-layer edge buffers (src/dst/inv_deg) change shape with the level set.
             payload["gnn_levels"] = self.model.gnn_levels

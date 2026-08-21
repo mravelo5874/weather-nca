@@ -12,7 +12,10 @@
 #   JOBS="configs/phase2d_control.yaml:0 configs/phase2d_control.yaml:1" \
 #     nohup bash scripts/run_queue.sh > ~/queue.log 2>&1 < /dev/null &
 #
-# Each job is `<config>:<seed>`. Cancel with: pkill -f run_queue.sh
+# Each job is `<config>:<seed>[:<k=v>[,<k=v>...]]`. The optional third field is passed straight
+# through to `--set`, so a hyperparameter sweep is just a job list. The run directory name
+# carries the overrides, so sweep arms cannot clobber each other.
+# Cancel with: pkill -f run_queue.sh
 set -uo pipefail          # deliberately NOT -e: one failing job must not skip the shutdown
 
 JOBS="${JOBS:?set JOBS='<config>:<seed> <config>:<seed> ...'}"
@@ -35,14 +38,20 @@ i=0
 for job in $JOBS; do
   i=$((i + 1))
   cfg="${job%%:*}"
-  seed="${job##*:}"
-  name="$(basename "$cfg" .yaml)_seed${seed}"
+  rest="${job#*:}"
+  seed="${rest%%:*}"
+  extra=""; slug=""
+  if [ "$rest" != "$seed" ]; then                # an override field is present
+    extra="$(echo "${rest#*:}" | tr ',' ' ')"
+    slug="_$(echo "${rest#*:}" | tr -c 'A-Za-z0-9' '-' | sed -e 's/--*/-/g' -e 's/-$//')"
+  fi
+  name="$(basename "$cfg" .yaml)_seed${seed}${slug}"
   out="runs/${name}"
   jlog="$HOME/${name}.log"
 
-  log "=== job $i: $cfg seed=$seed epochs=$EPOCHS -> $out"
+  log "=== job $i: $cfg seed=$seed epochs=$EPOCHS ${extra:+| $extra} -> $out"
   "$PY" -u -m wnca.cli train -c "$cfg" --out "$out" \
-      --set "train.seed=$seed" "train.epochs=$EPOCHS" > "$jlog" 2>&1
+      --set "train.seed=$seed" "train.epochs=$EPOCHS" $extra > "$jlog" 2>&1
   rc=$?
   if [ $rc -eq 0 ]; then
     log "job $i OK: $(tail -2 "$jlog" | head -1)"

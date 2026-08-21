@@ -13,8 +13,18 @@ Every phase so far has varied data, conditioning or training objective. The thes
 because there has been nothing non-local to compare against.
 
 2d supplies that: a same-budget non-local baseline on the same mesh, the same data and the same
-optimizer. If the local model holds up, the locality claim has support. If it does not, the
-project's headline is wrong, and it is better to know.
+optimizer.
+
+**The evidence this design produces is asymmetric, and not in the convenient direction.**
+Almost every uncontrolled factor tilts toward the local arm: `lr` and `weight_decay` were tuned
+on it (§4), it is handed ∇x, ∇y and ∇² for free by fixed geometry while the control must infer
+differential structure from raw neighbour values, it spends ~3× the compute per step, and —
+measured, see §5 — it actually reaches *further* per window than the "non-local" control does.
+
+So a **local win is close to uninformative**: it could be the learning rate, the compute, the
+free differential filter bank, or simply the greater reach. A **control win, despite all of
+that, would be damning** for the thesis. This experiment can falsify the locality claim far more
+cleanly than it can support it, and any write-up has to say so.
 
 ---
 
@@ -26,7 +36,7 @@ project's headline is wrong, and it is better to know.
 | `model.kind` | `nca` | `control_gnn` |
 | update rule | per-cell MLP over `[identity, ∇x, ∇y, ∇²]`, 1-hop | interaction-network message passing |
 | applications per 6 h window | **20 sub-steps** | **1 pass**, 6 message-passing hops |
-| non-locality comes from | nothing — strictly 1-hop | nested icosphere: coarse-level edges are valid long-range edges on the fine mesh |
+| non-locality comes from | nothing — strictly 1-hop | nested icosphere: coarse-level edges as long-range shortcuts. **But see §5** — measured, this reaches *less* far than the local arm |
 | **parameters** | **1,029,692** | **1,010,780** (0.982×) |
 
 Both inherit seeding, conditioning, rollout and ensemble machinery from `ForecastModel`, so the
@@ -97,18 +107,49 @@ min/epoch and is planned before the result is written up as anything stronger.
 
 ## 5. What a difference can and cannot attribute to
 
-The control changes **two things at once**: the update is non-local, *and* it is applied once
-instead of twenty times.
+The control changes **at least four things at once**, not two as an earlier version of this
+section claimed:
+
+1. **Locality** — the update sees shortcut edges rather than only immediate neighbours.
+2. **Iteration count** — one pass per window against twenty sub-steps.
+3. **Weight sharing** — the NCA applies *the same* MLP 20 times; the control has 6 distinct
+   layer stacks. Recurrence-versus-depth is its own axis.
+4. **Input featurisation** — the NCA is handed ∇x, ∇y and ∇² from fixed geometry; the control
+   must infer differential structure from raw neighbour values. That is a physics prior the
+   control does not get, and unlike the others it cannot be fixed by configuration.
 
 So a gap measures:
 
-> a strictly local rule iterated 20× **versus** a multi-scale non-local rule applied once,
-> at matched parameters
+> a strictly local, recurrent, differential-featurised rule iterated 20× **versus** a
+> shortcut-edge message-passing network applied once, at matched parameters
 
 and **not** locality in isolation. The clean single-variable control — same update MLP, same 20
-sub-steps, perception stencil widened to the coarse icosphere levels — is a follow-up, and is
-the experiment that would actually isolate the thesis. Recorded here so the finding is never
-written up as more than it is.
+sub-steps, same perception plus a uniform dilated ring — is the experiment that would actually
+isolate the thesis, and it is unrun. Recorded here so the finding is never written up as more
+than it is.
+
+### The control reaches less far than the arm it controls for (measured)
+
+Receptive field of one 6 h window, measured by gradient support on the real mesh
+(`scripts/measure_reach.py`) — not by counting hop spans, which gets it wrong by 1.5–3.6×:
+
+| | level-1 node | level-3 node | **fine-only node** (99.75% of mesh) |
+|---|---|---|---|
+| control, `gnn_levels 3` | 8 hops / 91 | 8 / 109 | **9 hops / 109 nodes** |
+| control, `gnn_levels 4` | 16 / 156 | 20 / 224 | 13 / 30 |
+| control, `gnn_levels 5` | 32 / 146 | 28 / 35 | 13 / 30 |
+| **NCA** | 20 / ~1200 | 20 / ~1200 | **20 hops / ~1200 nodes** |
+
+A coarse level's edge list only connects the nodes that **exist** at that level — level 1 has 42
+vertices of 10,242 — and `ControlGNN` has no pooling/unpooling to carry information between
+levels, so a coarse layer is a no-op for ~99.6% of the mesh. It is message passing on nested
+subgraphs, not a multi-scale architecture, and `gnn_levels` does not fix it: raising it shrinks
+coverage for typical nodes (109 → 30) while handing 42 privileged nodes 32 hops.
+
+**Consequence for what this experiment is.** The control is not a locality control. A loss is
+attributable to reach before topology. These runs should be reported as *a parameter-matched
+message-passing baseline with ~9-hop reach*, and the clean single-variable control — same MLP,
+same 20 sub-steps, perception widened by a uniform dilated ring — remains unrun.
 
 A related caveat from the pre-2d diagnostics: measured dt-invariance is **partial**. Refining
 the integration (dt 0.05×20 → 0.025×40) costs 3–7% RMSE, and coarsening blows up entirely. The
@@ -134,8 +175,13 @@ n=1.
 | **spread** | **+0.21%** |
 
 Per-epoch spread was noisy early (−5.5%, −13.2%, −3.5%) and converged steadily (−2.4%, −0.6%,
-−1.6%, +0.5%) to 0.21% at epoch 8. So **n = 2 is sufficient**: any gap above ~1% is real, and
-the third seed per arm that looked like it might be needed is not.
+−1.6%, +0.5%) to 0.21% at epoch 8.
+
+**This is the local arm's noise floor, and only that.** An earlier version of this section
+concluded "n = 2 is sufficient", which silently assumed the control's seed variance is similar.
+It may well not be: rollout-unstable models tend to have fatter seed distributions, and the
+control's early diagnostics (val 4.5× train) point that way. The control's own two seeds will
+measure it; until they land, no sufficiency claim is supported.
 
 ---
 

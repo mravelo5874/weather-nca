@@ -53,6 +53,25 @@ model:
   kind: control_gnn
   gnn_hidden: 160                # matched to the NCA: 1,010,780 vs 1,029,692 params
   gnn_hops: 6
+  # REACH -- and a knob that does NOT fix it. Measured by gradient support on the real mesh
+  # (scripts/measure_reach.py), one 6 h window, receptive field of a single output node:
+  #
+  #                        level-1 node    level-3 node    fine-only node (99.75% of mesh)
+  #     gnn_levels 3         8 hops          8 hops          9 hops   / 109 nodes
+  #     gnn_levels 5        32 hops         28 hops         13 hops   /  30 nodes
+  #     NCA (20 sub-steps)  20 hops         20 hops         20 hops   / ~1200 nodes
+  #
+  # The naive "sum of hop spans" arithmetic says 14 and 47. Both are wrong, because a
+  # coarse-level edge list only connects the nodes that EXIST at that level: level 1 has 42
+  # vertices of 10,242, so a coarse layer is a no-op for ~99.6% of the mesh. There is no
+  # pooling/unpooling to carry information between levels, so this is not really a multi-scale
+  # architecture -- it is message passing on nested subgraphs.
+  #
+  # Consequence: at EVERY available setting the typical node has LESS reach than the strictly
+  # local arm, and raising gnn_levels makes coverage worse (109 -> 30 nodes) while creating
+  # extreme non-uniformity (42 privileged nodes get 32 hops, everyone else 13). Left at 3, the
+  # uniform setting, until the architecture is fixed. See docs/phase2d-experiment.md.
+  gnn_levels: 3
   # spectral_norm is deliberately OFF here. It wraps `UpdateRule`, which the control GNN does
   # not use, so setting it true would be a no-op that still changed arch_hash. The GNN has no
   # 20-sub-step recurrence and so does not have the instability it was introduced to fix.

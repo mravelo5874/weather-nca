@@ -142,6 +142,14 @@ class ModelConfig:
     grad_ckpt: bool = True  # recompute sub-steps in backward
 
     # --- control GNN only ---
+    # How many icosphere levels the message passing may use. Level L's edges span 2^(n_sub-L)
+    # fine-mesh hops, and layers cycle coarse-to-fine, so this sets the control's REACH:
+    #   3 -> levels 5,4,3, spans 4,2,1  -> 14 fine hops per window (0.70x the NCA's 20)
+    #   5 -> levels 5,4,3,2,1           -> 47 fine hops per window (2.35x)
+    # At 3 the "non-local" control moved information LESS far per window than the strictly
+    # local arm, which makes it useless as a control for non-locality. Edge sets are buffers,
+    # not parameters, so this changes reach at a fixed parameter count.
+    gnn_levels: int = 3
     gnn_hops: int = 4
     gnn_hidden: int = 256
 
@@ -291,6 +299,9 @@ class Config:
         # checkpoint in the project.
         if self.state.solar_forcing:
             payload["solar_forcing"] = True
+        if self.model.kind == "control_gnn" and self.model.gnn_levels != 3:
+            # The per-layer edge buffers (src/dst/inv_deg) change shape with the level set.
+            payload["gnn_levels"] = self.model.gnn_levels
         if self.model.spectral_norm:
             # Spectral norm reparametrizes `weight` (extra buffers, moved parameter), so the
             # state-dict keys differ from a plain model even though the shapes do not.

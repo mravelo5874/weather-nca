@@ -5,16 +5,25 @@ DeepMind" -- unanswerable on four spot GPUs -- into "does restricting the update
 local rule cost accuracy, holding everything else fixed," which is answerable and is the actual
 thesis under test.
 
-Matched to the NCA on mesh, variables, data, optimizer, and (by tuning `gnn_hidden` /
-`gnn_hops`) parameter count and wall-clock. It inherits seeding, conditioning, rollout and
+Matched to the NCA on mesh, variables, data, optimizer and PARAMETER COUNT (by tuning
+`gnn_hidden` / `gnn_hops`). Wall-clock is deliberately NOT matched and cannot be: this runs one
+pass per window against the NCA's 20 sub-steps, so at equal parameters it is ~3x faster. That
+gap is reported as a result, not engineered away -- see configs/phase2d_control.yaml. It inherits seeding, conditioning, rollout and
 ensemble machinery from `ForecastModel`, so the *only* thing that differs is the update
 operator: one non-local message-passing pass per 6 h window instead of `n_substeps` strictly
 local ones.
 
 Non-locality comes from the nested icosphere. `icosphere(k)` keeps the vertices of
-`icosphere(k-1)` as its first N_{k-1} entries, so the coarse levels' edge lists are valid
-long-range edges on the fine mesh -- one hop at level `n_sub - 3` spans roughly eight fine
-cells. Layers cycle through the levels coarse-to-fine, which is the multi-scale part.
+`icosphere(k-1)` as its first N_{k-1} entries (verified), so the coarse levels' edge lists are
+valid long-range edges on the fine mesh: **one hop at level L spans 2^(n_sub-L) fine cells**,
+measured by BFS on the fine graph. Layers cycle through the levels coarse-to-fine.
+
+`cfg.model.gnn_levels` sets how many levels are available, and therefore the control's reach.
+It was hardcoded to 3 (levels 5,4,3; spans 4,2,1), which over 6 hops reaches 14 fine cells per
+window against the strictly local NCA's 20 -- the "non-local" arm moved information LESS far
+than the local one, so a loss said nothing about non-locality. An earlier version of this
+docstring claimed level `n_sub - 3` was in use; with n_levels=3 the range stops at level 3 and
+level 2 is never built.
 """
 
 from __future__ import annotations
@@ -76,7 +85,7 @@ class ControlGNN(ForecastModel):
         self.cfg = cfg
         n_nodes = len(mesh["v"])
         hidden = cfg.model.gnn_hidden
-        levels = multiscale_edges(cfg.mesh.n_sub, n_levels=3)
+        levels = multiscale_edges(cfg.mesh.n_sub, n_levels=cfg.model.gnn_levels)
 
         self.encoder = nn.Sequential(
             nn.Linear(cfg.c_state + cfg.c_cond, hidden), nn.GELU(), nn.Linear(hidden, hidden)

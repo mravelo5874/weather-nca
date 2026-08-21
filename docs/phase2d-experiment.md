@@ -180,14 +180,43 @@ Per-epoch spread was noisy early (−5.5%, −13.2%, −3.5%) and converged stea
 **This is the local arm's noise floor, and only that.** An earlier version of this section
 concluded "n = 2 is sufficient", which silently assumed the control's seed variance is similar.
 It may well not be: rollout-unstable models tend to have fatter seed distributions, and the
-control's early diagnostics (val 4.5× train) point that way. The control's own two seeds will
-measure it; until they land, no sufficiency claim is supported.
+control's early diagnostics (val 4.5× train) point that way.
+
+### The GNN control's seed variance stays unmeasured, deliberately
+
+An earlier plan ran a second GNN seed to measure it. That seed's purpose was to make the GNN
+defensible *as the locality control*, and §5 has since demoted it to a message-passing baseline.
+Its result is therefore reported at **n = 1**, with the variance explicitly unknown. At epoch 6
+the GNN sits at selection 0.413 against the local arm's ~0.122 — 3.4× behind — so no plausible
+seed variance changes how that reads. Skipping it saves ~$7 and ~7 h of a queue whose real
+constraint is calendar time on a one-GPU quota.
+
+### Pre-registered seed rule for the dilated arms
+
+Recorded **before any dilated run finishes**, so the adaptive design is a design and not a
+post-hoc rationalisation.
+
+> Seed 0 of `d=8` and `d=1` run unconditionally. **Seeds 1 of both run if and only if the
+> seed-0 gap between them is under 5% on the test-2020 24 h z500 RMSE.**
+
+Why 5% and not the 1–2% first proposed: the 0.21% floor above was measured at
+`perception_dilation = 0`, which is a *different architecture* — four perception groups, a
+narrower first layer, no ring operator. The prior that the dilated arm behaves similarly is much
+stronger than it ever was for the GNN (same architecture family, same recipe, one extra input
+group) but it is still a prior standing in for a measurement, which is the exact substitution
+this section was corrected for making. If the dilated floor were 5× the measured one, a 2% gap
+would be two standard deviations at n = 1. 5% leaves room for that.
+
+**Expect the gate to fire.** The thesis-confirming outcome — locality is sufficient — is *by
+definition* a small `d=8` vs `d=1` gap, so the branch most likely to need the extra seeds is the
+one we most expect. A null claimed at n = 1 is a weak null; nulls need error bars more than
+positive results do, not less. The ~$43 for seeds 1 is therefore budgeted, not hoped against.
 
 ---
 
 ## 7. Execution
 
-One `g2-standard-8` (1× NVIDIA L4, bf16) in `us-east1-c`. The four runs are **sequential, not
+One `g2-standard-8` (1× NVIDIA L4, bf16) in `us-east1-c`. Every run is **sequential, not
 parallel**, because the project's GPU quota is 1:
 
 ```
@@ -201,12 +230,17 @@ single run and wrong for a queue, where a shutdown between arms would need a man
 into a possible capacity stockout each time. `scripts/cloud_launch.sh` clones the prepared disk
 snapshot for parallel arms once quota allows.
 
+Measured per-run cost, which is what makes the §9 trimming decisions concrete:
+
 | run | wall clock | cost |
 |---|---|---|
 | NCA seed 0 (= phase 2c) | 22 h 05 m | ~$20 |
-| NCA seed 1 | ~22 h | ~$20 |
-| GNN seed 0 | ~7.4 h | ~$7 |
-| GNN seed 1 | ~7.4 h | ~$7 |
+| NCA seed 1 | 22 h | ~$20 |
+| GNN seed 0 | 7.4 h (55 min/epoch) | ~$7 |
+| dilated arm, either `d` | ~24 h (2 h 45 m × 1.10/epoch) | ~$21 |
+
+The dilated arms cost NCA time rather than GNN time because they *are* the NCA, plus one sparse
+matmul per sub-step.
 
 ### One bug this uncovered
 
@@ -228,11 +262,12 @@ dtypes agree there and a CPU version of the test passes with or without the fix.
 
 ---
 
-## 8. Status as of 2026-08-21 21:00 UTC
+## 8. Status as of 2026-08-21 23:00 UTC
 
 - NCA seeds 0 and 1: **complete**
-- GNN seed 0: **epoch 4 of 8**
-- GNN seed 1: queued
+- GNN seed 0: **epoch 6 of 8**
+- GNN seed 1: **cut** (§6)
+- Dilated `d=8` and `d=1`, seed 0: queued; seeds 1 gated (§6, §9)
 - Evaluation: **not yet run for any arm** — training metrics are not the comparison quantity.
   The headline is RMSE vs lead on held-out test 2020, via `wnca eval`.
 
@@ -245,8 +280,10 @@ half-trained:
 | 2 | 0.19875 | 0.59331 |
 | 3 | 0.15742 | 0.54636 |
 | 4 | 0.14693 | 0.47589 |
+| 5 | 0.13313 | 0.46034 |
+| 6 | 0.12165 | 0.41281 |
 
-The control is behind by ~3× on the 72 h rollout metric and is closing slowly. Its **train**
+The control is behind by ~3.4× on the 72 h rollout metric and is closing slowly. Its **train**
 loss is only ~7% worse at epoch 4 (0.0568 vs 0.0415) while its **val** loss is 4.5× worse
 (0.1119 vs 0.0249) — and the sign of the train/val relationship flips between arms: the NCA's
 val sits *below* its train loss (it trains on harder pushforward states and validates on clean
@@ -258,9 +295,45 @@ check of §4 is the whole question.
 
 ---
 
-## 9. Checklist before this is written up as a result
+## 9. The queue, and what was cut
 
-- [ ] All four runs complete
+The GNN arm is a baseline; the **dilated arms are the experiment**. `configs/phase2d_dilated.yaml`
+carries the full design and its measured properties; in short, it changes exactly one thing
+against phase 2c — perception gains a fifth group, the mean over the ring at exactly
+`perception_dilation` hops — and the two arms it defines (`d=1`, `d=8`) are identical in
+parameters (1,060,412) and in wall-clock (1.10× phase 2c, and 1.097 vs 1.102 against each other),
+differing only in reach (20 vs 160 hops per window, against a mesh diameter of ~93).
+
+| # | run | status |
+|---|---|---|
+| 1 | GNN seed 0 | finishing — sunk, and the baseline datapoint |
+| 2 | **dilated `d=8` seed 0** | committed |
+| 3 | **dilated `d=1` seed 0** | committed |
+| 4–5 | dilated seeds 1 | **gated** on #2 vs #3 being within 5% (see §6) |
+| — | GNN seed 1 | **cut** — see §6 |
+| — | GNN lr/weight-decay sweep, 3 runs | **cut** |
+
+**Why the sweep was cut.** It existed to make the GNN a fair *locality control*. The dilated arms
+took that job, and they need no fairness sweep: they are the local arm's own architecture and
+training recipe with one extra input group, so hyperparameter transfer is about as defensible as
+it gets. No amount of tuning turns a message-passing baseline into a locality test, so a tuned
+GNN would add nothing the untuned one does not already show. If a reader asks whether the GNN was
+simply mis-tuned, the answer is that it was not tuned and is not the control.
+
+Committed spend ~$43, worst case ~$86, against ~$112 for the queue as originally armed. On a
+one-GPU quota the calendar time matters as much as the money: each cut run is 7–24 hours.
+
+**Not cut, and not to be cut:** evaluation. `wnca eval` on test 2020 with `--checkpoint` passed
+explicitly, `scripts/diag_val_split.py`, and the off-24h-grid 2 m temperature check are where the
+answer actually lives, and together they cost ~$3 against runs costing $21 each. Skimping there
+to save a few dollars would repeat phase 2b's mistake in a new form.
+
+---
+
+## 10. Checklist before this is written up as a result
+
+- [ ] The committed runs complete (GNN seed 0; dilated d=8 and d=1, seed 0)
+- [ ] The §6 seed gate applied as written, and the decision recorded either way
 - [ ] `wnca eval` on **test 2020** for all four checkpoints, `--checkpoint` passed explicitly
       (the disk carries 2c checkpoints too, and eval globs `best_*.pt`)
 - [ ] Hyperparameter fairness probe on the control arm (§4)

@@ -133,7 +133,8 @@ def linechart(series, xs, *, w=760, h=380, xlab="", ylab="", ymax=None, ymin=0,
     return "\n".join(p)
 
 
-def barchart(rows, *, w=760, h=520, pad_l=150, pad_r=64, pad_t=8, pad_b=34, unit="%"):
+def barchart(rows, *, w=760, h=520, pad_l=150, pad_r=64, pad_t=8, pad_b=34, unit="%",
+             fmt="{:+d}", zero_label="0 = persistence"):
     """Horizontal bars, diverging around zero. `rows` = [(label, value)]."""
     x0, x1 = pad_l, w - pad_r
     lo = min(0, min(v for _, v in rows)) * 1.08
@@ -152,10 +153,11 @@ def barchart(rows, *, w=760, h=520, pad_l=150, pad_r=64, pad_t=8, pad_b=34, unit
         tx_ = b + 7 if v >= 0 else a - 7
         anc = "start" if v >= 0 else "end"
         p.append(f'<text x="{tx_:.1f}" y="{y + bh / 2 + 4:.1f}" class="barval" '
-                 f'text-anchor="{anc}">{v:+d}{unit}</text>')
+                 f'text-anchor="{anc}">{fmt.format(v)}{unit}</text>')
     p.append(f'<line x1="{zx:.1f}" y1="{pad_t}" x2="{zx:.1f}" y2="{h - pad_b}" class="axis"/>')
-    p.append(f'<text x="{zx:.1f}" y="{h - 14}" class="tick" text-anchor="middle">'
-             f'0 = persistence</text>')
+    if zero_label:
+        p.append(f'<text x="{zx:.1f}" y="{h - 14}" class="tick" text-anchor="middle">'
+                 f'{zero_label}</text>')
     p.append("</svg>")
     return "\n".join(p)
 

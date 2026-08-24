@@ -395,6 +395,42 @@ Move to M3 when all five hold:
 2. **The gap closes with scale.** The 2a → 2b → 2c ladder shows RMSE improving with data and coupling rather than plateauing. The *slope* is the deliverable, not any single number.
 3. **The ensemble is real.** Spread–skill ratio in 0.8–1.25 for z500 at 1 d and 3 d, and a zero-noise ablation that is measurably different from the ensemble mean.
 4. **Members are individually sharp.** Band energies of individual members within 20% of ERA5 at 72 h, with the spectral-term ablation documented either way.
-5. **Stable to 15 days**, `perturbation_growth` ≤ ~1.05 per window, per variable.
+5. **Error growth is physically plausible, and the forecast is bounded.** Superseded 2026-08-24;
+   see below.
+
+### Criterion 5, amended
+
+The original read: *stable to 15 days, `perturbation_growth` ≤ ~1.05 per window, per variable.*
+That threshold is **wrong in kind, not just in value**, and every model in the ladder that is
+any good fails it:
+
+| model | sustained growth | doubling | 24 h z500 |
+|---|---|---|---|
+| phase 0 | ×1.033 | 5.34 d | 329.7 |
+| 2b-pushforward | ×1.139 | 1.33 d | 282.1 |
+| phase 2c (best) | ×1.079 | 2.28 d | **174.7** |
+
+Only phase 0 passes ≤1.05, and phase 0 is the *worst* forecaster in the table. The criterion
+selects for **over-damping**: a model that smooths its own errors away scores well on it and
+forecasts badly. The real atmosphere doubles synoptic-scale errors in roughly 1.5–2.5 days, so a
+model at 5.34 d is not stable, it is sluggish.
+
+This matters more for phase 3 than it did for phase 2. **Over-damping directly suppresses
+ensemble spread**, which is what 3a exists to measure — so applying the original criterion to a
+probabilistic phase would select against the phase's own objective.
+
+**Amended criterion 5.** Both must hold:
+
+  a. **Error-doubling time in 1.2–3.5 days**, computed from sustained per-window
+     `perturbation_growth` as `ln 2 / ln(g⁴)`, on the pooled state. A band, not a ceiling: too
+     slow is over-damped, too fast is unstable. The 1.5–2.5 d synoptic range sits inside it with
+     room for measurement error.
+  b. **Bounded at long lead**: 15-day RMSE ≤ 1.5× climatology, which is the property "stable to
+     15 days" was actually reaching for. Phase 2c sits at 1.34×; 2b was at 3.23× and genuinely
+     diverging.
+
+**Report doubling time with error bars.** Two seeds of the same phase-2c model differ by 12% on
+this quantity (2.28 d vs 2.01 d), so a single run cannot place a model in or out of the band on
+its own — see `docs/phase2d-results.md` §4 and §8.
 
 Beyond M2: mesh refinement toward 100 km then 28 km (with the corrected node-count arithmetic), the full 13-level state, calibrated extremes, and the project's original architectural bet — Lagrangian feature particles layered on the Eulerian base, the Neural Particle Automata direction the mesh design was chosen to allow.

@@ -53,8 +53,30 @@ differs** — is:
 | 240 h | 1228.2 | 1290.7 | −4.8% |
 | 360 h | 1556.7 | 1732.4 | −10.1% |
 
-**D beats E at every one of the nine leads.** Reach is doing real work — roughly enough to pay
-back what the architecture change costs, and no more.
+**D beats E at every one of the nine leads.** That is consistent with reach doing real work —
+roughly enough to pay back what the architecture change costs, and no more.
+
+**How much weight the nine-lead consistency carries: less than it looks.** These are not nine
+independent observations. A rollout is one trajectory family from one set of weights, so a
+seed's idiosyncrasy propagates through every lead — the nine leads are closer to **one
+correlated observation** than to nine. With one seed per arm against a 0.8% seed spread measured
+on a *different* architecture, 3.9% is suggestive and not established. The seed pair is running;
+§7.
+
+### The decomposition is shakier than the 3.9%
+
+D vs E cleanly isolates ring **radius**: same parameters, same compute, one knob. That number is
+solid modulo seeds.
+
+The other half of the story — "the fifth channel costs 3.7%" — comes from E vs A, and it is
+*not* clean. E's ring at 1 hop is a **uniform-weight Laplacian sitting alongside the existing
+cotangent Laplacian**: two near-collinear inputs. So E's deficit may be specific to feeding the
+update MLP a near-duplicate channel rather than to added capacity in general, and a placebo
+carrying an uninformative-but-non-redundant channel might cost nothing at all.
+
+The clean statement of the result is therefore: **increasing the ring radius from 1 to 8 hops
+improves 24 h z500 RMSE by 3.9%.** The "two effects cancelling" narrative is interpretation
+layered on one clean measurement and one confounded one.
 
 ### Why the earlier design would have missed this
 
@@ -74,16 +96,17 @@ drawn wrongly. The first was the receptive-field measurement (§5 below).
 The project's claim is that *a strictly local update rule is enough to forecast global weather*.
 The result is more interesting than either a clean confirmation or a refutation:
 
-- **Reach is worth ~4% at 24 h.** Locality is not free. A model that can see 160 mesh hops per
-  window forecasts measurably better than the same model that can see 20.
+- **Reach looks worth ~4% at 24 h.** Locality may not be free: a model that can see 160 mesh
+  hops per window scored better than the same model that can see 20. One seed per arm, so this
+  is the claim the running seed pair is there to confirm or kill.
 - **But the plain local model matches it.** A and B score 174.7 and 173.3 against D's 173.4,
   with 3% fewer parameters and 10% less compute per window. The cheapest way to get D's
   accuracy is not to add reach — it is to not add the channel that carries it.
-- **So locality is sufficient *at this budget*, and reach is not free skill.** Both statements
-  are true and neither is the headline on its own.
+- **So locality is sufficient *at this budget*, and reach may not be free skill.** Both
+  statements sit together and neither is the headline on its own.
 
-What it does **not** license is "non-locality doesn't help" — 4% is a real effect, and this
-tested exactly one radius, isotropically (§6).
+What it does **not** license is "non-locality doesn't help". Nor does it yet license "reach is
+worth 4%" as a settled number — one seed per arm, one radius, isotropic (§6).
 
 ---
 
@@ -102,10 +125,12 @@ doubles synoptic-scale errors in roughly 1.5–2.5 days.
 
 Two readings:
 
-- **Reach makes error grow faster.** D at 1.87 d against the placebo's 2.25 d. The longer-range
-  channel makes the forecast start better and degrade quicker — consistent with the D−E gap
-  narrowing from 3.9% at 24 h to 2.1% at 120 h before widening again at 15 days where noise
-  dominates.
+- **Reach may make error grow faster — consistent with, not established.** D at 1.87 d against
+  the placebo's 2.25 d is an 18.5% difference. But A and B, *the same model at different seeds*,
+  differ by 12.6% on this exact quantity. So the D−E growth gap is only about 1.5× the observed
+  seed spread, which is not enough to call it. It would fit a "starts better, degrades quicker"
+  mechanism — the D−E RMSE gap does narrow from 3.9% at 24 h to 2.1% at 120 h — but the seed
+  pair has to land before that reading means anything.
 - **The GNN doubles error twice as fast as the atmosphere.** That is the signature of a model
   whose own states drift off-distribution, and it matches its collapse beyond 72 h.
 
@@ -197,22 +222,53 @@ Mean skill **−43.5% on the 24 h grid, +16.8% off it** — a 60-point sawtooth.
 for a diurnally-dominated surface field that makes it an unusually strong baseline at exactly
 those leads. z500 shows no such pattern, so this is specific to the field, not an evaluation bug.
 
-**Consequence:** 2 m temperature must be quoted off the 24 h grid from now on, and the
-unresolved 2b′ claim that solar forcing is "worth 19% on 2t" was judged on the same bad metric.
+**Consequence:** 2 m temperature must be quoted off the 24 h grid from now on.
+
+### Correction: this does *not* touch the 2b′ solar-forcing claim
+
+An earlier version of this section said the unresolved 2b′ claim that solar forcing is "worth
+19% on 2t" was "judged on the same bad metric". **That was wrong, and it was checked only after
+being asserted.** The 19% came from a *within-model ablation* — the same 2b′ checkpoint scored
+with real forcing against forcing zeroed, in raw RMSE:
+
+| lead | real forcing | zeroed | gain | on the 24 h grid? |
+|---|---|---|---|---|
+| 6 h | 2.230 | 2.397 | 7.0% | no |
+| 12 h | 2.895 | 3.195 | 9.4% | no |
+| 18 h | 3.042 | 3.532 | 13.9% | no |
+| 24 h | 3.273 | 4.019 | **18.6%** | yes |
+
+Two things follow. **Persistence never enters that comparison**, so the diurnal-alignment
+artefact cannot apply to it. And the ablation **already spans off-grid leads**, showing 7–14%
+there — so the effect is not confined to 24 h multiples, it grows with lead.
+
+The claim's real problem is the one the findings doc already names: it was measured on an
+undertrained, confounded model (2b′ also doubled `n_substeps` and had its LR halved mid-run),
+and **it has never been repeated on a healthy model**. Phase 2c has solar forcing on, so the
+same forcing-zeroed ablation can be run against its checkpoint. That is the experiment that
+settles it, and it is evaluation-only. Deferred while the instance trains the seed pair.
+
+A separate measurement, run while chasing this: comparing the 2b (no solar) and 2b′ (solar)
+*checkpoints* on 2 m temperature shows 2b′ **worse at every lead**, by 10% at 24 h rising to
+47% at 72 h. That is a different comparison from the ablation — two differently-trained models
+rather than one model with an input switched off — and it mostly restates that 2b′ is
+undertrained. `scripts/diag_2t_solar.py`, `diag_2t_solar.json`.
 
 ---
 
-## 10. A diagnostic that did not work
+## 10. A diagnostic that did not work, and was deleted
 
 `scripts/diag_val_split.py` was written to separate two readings of the GNN's inverted
-train/val relationship: rollout instability versus over-regularisation. It compares a
-**one-window prediction against a two-window target**, so its two halves are not the same task
-and its ratios are not interpretable. Its numbers are excluded from this write-up rather than
+train/val relationship: rollout instability versus over-regularisation. It compared a
+**one-window prediction against a two-window target**, so its two halves were not the same task
+and its ratios were not interpretable. Its numbers were excluded from this write-up rather than
 explained.
 
-The fix is not a one-liner: a matched-lead version must step the *analysis* forward one window
-for the clean arm, so both arms predict the same target from different starting states. Not yet
-done. Recorded here because the tool is in the repo and should not be trusted until it is.
+**Deleted rather than fixed.** A matched-lead rewrite would have to step the *analysis* forward
+one window for the clean arm so both arms predict the same target from different starting
+states — doable, but the question it answered died with the GNN's demotion to a baseline
+(§5), and a broken tool with no live use case is worse than no tool. If the question returns,
+the rewrite is specified in this paragraph.
 
 This is the second diagnostic this milestone that passed its own smoke test and measured the
 wrong thing — the first being the receptive-field arithmetic in §5, which was wrong by 1.5–3.6×
@@ -228,6 +284,10 @@ in two independent estimates before anyone measured it.
    architecture it starts from and locks to it for 15 epochs. A is the cheapest and matches D's
    accuracy; D is 4% better than its own placebo but not better than A. **A is the
    recommendation** unless the seed pair changes the picture.
-3. **Fix or delete `diag_val_split.py`** (§10).
-4. **Amend exit criterion 5.** Still unadopted, and every arm here fails it as written
-   (≤1.05 sustained growth) while being the best models in the ladder.
+3. ~~Fix or delete `diag_val_split.py`~~ — **done**, deleted (§10).
+4. ~~Amend exit criterion 5~~ — **done**. Replaced with a doubling-time *band* (1.2–3.5 d) plus a
+   long-lead boundedness test, in `milestone-2-plan.md`. The original ≤1.05 ceiling selected for
+   over-damping: only phase 0 passed it, and phase 0 is the worst forecaster in the ladder. That
+   matters more for 3a than it did here, because over-damping directly suppresses ensemble
+   spread — the thing 3a exists to measure.
+5. **Re-score the 2b′ solar-forcing claim off the 24 h grid** — see `scripts/diag_2t_solar.py`.

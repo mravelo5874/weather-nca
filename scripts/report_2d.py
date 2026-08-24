@@ -29,12 +29,14 @@ A = [131.5, 110.3, 174.7, 319.4, 461.2, 743.2, 952.3, 1217.3, 1474.6]   # 2c see
 B = [129.0, 110.2, 173.3, 318.2, 460.6, 734.3, 944.4, 1133.6, 1305.5]   # 2c seed 1
 C = [232.6, 137.9, 291.2, 711.1, 1014.0, 1390.4, 1594.9, 1746.9, 1983.5]  # control GNN
 D = [129.9, 108.5, 173.4, 320.2, 467.0, 763.2, 977.9, 1228.2, 1556.7]   # dilated d=8
+E = [131.7, 112.1, 180.4, 332.9, 481.6, 779.7, 1002.9, 1290.7, 1732.4]  # d=1 placebo
 PERSIST = [229.6, 364.7, 593.5, 829.7, 932.9, 1043.1, 1102.8, 1134.7, 1138.1]
 CLIM = [1105.8, 1106.2, 1104.6, 1102.7, 1099.3, 1092.4, 1099.6, 1102.0, 1097.1]
 
 # Sustained per-window perturbation growth (the direct diagnostic).
 GROWTH = {"A · local, seed 0": 1.079, "B · local, seed 1": 1.090,
-          "D · dilated d=8": 1.097, "C · control GNN": 1.195}
+          "E · d=1 placebo": 1.080, "D · dilated d=8": 1.097,
+          "C · control GNN": 1.195}
 
 # 2 m temperature skill vs persistence at every 6 h lead, arm A. Starred leads are multiples
 # of 24 h, where persistence is diurnally aligned and therefore an unusually strong baseline.
@@ -58,8 +60,7 @@ ARMS = [
      "<b>the treatment</b> &mdash; identical to A except perception sees globally"),
     ("E", "phase 2d dilated, d=1", "local NCA + ring at 1 hop",
      "5 &mdash; &hellip; ring<sub>1</sub>", "20 hops (= A)", "1,060,412 (= D)",
-     "<b>the placebo</b> &mdash; parameter- and compute-identical to D, no extra reach. "
-     "<b>Still training.</b>"),
+     "<b>the placebo</b> &mdash; parameter- and compute-identical to D, no extra reach"),
 ]
 
 
@@ -72,6 +73,7 @@ def build() -> str:
             {"name": "B · local s1", "vals": B, "color": "var(--s1)", "width": 1.8,
              "dash": "6 4"},
             {"name": "D · d=8", "vals": D, "color": "var(--s3)", "width": 2.6, "emph": True},
+            {"name": "E · d=1", "vals": E, "color": "var(--s3)", "width": 1.8, "dash": "6 4"},
             {"name": "persist.", "vals": PERSIST, "color": "var(--mut)", "width": 1.4,
              "dash": "5 4"},
             {"name": "clim.", "vals": CLIM, "color": "var(--mut)", "width": 1.4, "dash": "2 4"},
@@ -105,10 +107,10 @@ def build() -> str:
         f"<tr><td class='mono num'>{h}h</td><td class='mono num'>{a:.1f}</td>"
         f"<td class='mono num'>{b:.1f}</td>"
         f"<td class='mono num' style='color:var(--ink3)'>{100*abs(a-b)/((a+b)/2):.1f}%</td>"
-        f"<td class='mono num hero'>{d:.1f}</td>"
-        f"<td class='mono num'>{100*(d/((a+b)/2)-1):+.1f}%</td>"
+        f"<td class='mono num hero'>{d:.1f}</td><td class='mono num'>{e:.1f}</td>"
+        f"<td class='mono num hero'>{100*(d/e-1):+.1f}%</td>"
         f"<td class='mono num'>{c:.1f}</td></tr>"
-        for h, a, b, c, d in zip(LEADS, A, B, C, D))
+        for h, a, b, c, d, e in zip(LEADS, A, B, C, D, E))
 
     arms = "\n".join(
         f"<tr><td class='mono hero'>{t}</td><td class='mono'>{cfg}</td><td>{rule}</td>"
@@ -119,7 +121,8 @@ def build() -> str:
     return TEMPLATE.format(rmse=rmse, spread=spread_chart, growth=growth_chart, t2m=t2m,
                            ladder=ladder, arms=arms,
                            dA=f"{dbl(1.079):.2f}", dB=f"{dbl(1.090):.2f}",
-                           dC=f"{dbl(1.195):.2f}", dD=f"{dbl(1.097):.2f}")
+                           dC=f"{dbl(1.195):.2f}", dD=f"{dbl(1.097):.2f}",
+                           dE=f"{dbl(1.080):.2f}")
 
 
 TEMPLATE = """<title>Phase 2d Locality Control</title>
@@ -218,12 +221,13 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
 <header>
   <div class="eyebrow">Milestone 2 · Phase 2d · the thesis under test</div>
   <h1>Does a local rule need to see further?</h1>
-  <p class="lede">Give a strictly local weather model global reach &mdash; 160 mesh hops per
-  6-hour window, 1.7&times; the diameter of the planet's grid &mdash; and its 24-hour forecast
-  error moves by less than the gap between two random seeds.</p>
+  <p class="lede">Give a strictly local weather model global reach and its forecasts barely
+  change &mdash; but that near-zero is two effects cancelling. The reach itself is worth
+  <b>4%</b>; the extra machinery needed to carry it costs almost exactly the same. Only the
+  placebo arm makes that visible.</p>
   <div class="meta mono">
     <span>held-out test <b>2020</b></span>
-    <span><b>4 of 5</b> arms evaluated</span>
+    <span><b>5 of 5</b> arms evaluated</span>
     <span>NVIDIA L4 · bf16</span>
     <span>39 years · 28 channels · 10,242 nodes</span>
   </div>
@@ -232,8 +236,8 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
 <div class="stats">
   <div class="stat"><div class="k">24 h z500 · local (A/B)</div><div class="v">174.7 / 173.3</div>
     <div class="s">m²/s² · the two seeds</div></div>
-  <div class="stat"><div class="k">24 h z500 · global reach</div><div class="v">173.4</div>
-    <div class="s">inside the seed spread</div></div>
+  <div class="stat"><div class="k">D vs E · reach alone</div><div class="v up">&minus;3.9%</div>
+    <div class="s">the pre-registered comparison</div></div>
   <div class="stat"><div class="k">seed spread at 360 h</div><div class="v down">12.2%</div>
     <div class="s">vs 0.8% at 24 h</div></div>
   <div class="stat"><div class="k">control GNN, 24 h</div><div class="v down">+67%</div>
@@ -254,19 +258,31 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
     <div class="eyebrow">The pre-registered comparison is D vs E, and E is unfinished</div>
     <p>D and E are identical in parameters and wall-clock and differ only in reach, so their
     difference is attributable to reach alone. D against A is <em>not</em> that comparison: A
-    has 3% fewer parameters, and the sign of that confound is unknown. Everything below is
-    therefore evidence, not the verdict.</p>
+    has 3% fewer parameters, and the sign of that confound is unknown &mdash; E now shows that
+    sign is <em>negative</em>, which is why gating this arm on a D win would have buried the
+    effect entirely.</p>
+    <p><b>One seed each.</b> The 3.9% gap sits under the pre-registered 5% threshold, so the
+    second seed of both arms is running. Until it lands this is n=1 against a 0.8% seed
+    spread &mdash; suggestive, not settled.</p>
   </div>
 </section>
 
 <section>
   <hr class="rule">
   <div class="eyebrow">Forecast skill</div>
-  <h2>Global reach lands inside the noise</h2>
+  <h2>Two effects, cancelling</h2>
   <div class="prose">
   <p>At 24 hours the two local seeds score <strong>174.7</strong> and <strong>173.3</strong>.
-  The globally-connected model scores <strong>173.4</strong> &mdash; between them. Whatever
-  160-hop reach buys, it is smaller than the difference between running the same model twice.</p>
+  The globally-connected model scores <strong>173.4</strong> &mdash; between them. Read alone,
+  that says reach buys nothing.</p>
+  <p>The placebo says otherwise. Arm E carries the same fifth perception channel as D and the
+  same 1,060,412 parameters, but its ring sits at 1 hop, so it adds <em>no reach at all</em>.
+  It scores <strong>180.4</strong> &mdash; <strong>3.7% worse than the plain local model</strong>.
+  The extra channel, on its own, hurts.</p>
+  <p>So <strong>D beats E by 3.9%</strong>, and does so at <em>every one of the nine lead
+  times</em>, by 1.4% to 11.3%. Reach is doing real work &mdash; roughly enough to pay back what
+  the architecture change costs, and no more. Against a 0.8% seed spread at 24 h, a consistent
+  4% gap is not noise.</p>
   <p>The control GNN is in another regime entirely: <strong>+67% at 24 h</strong>, and worse
   than persistence at 6 h and beyond 72 h. Its measured receptive field is 9 hops, less than
   the local model's 20, so it was never a test of non-locality.</p>
@@ -279,7 +295,8 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
   <div class="tbl"><table>
     <thead><tr><th class="num">lead</th><th class="num">A · local s0</th>
     <th class="num">B · local s1</th><th class="num">seed spread</th>
-    <th class="num">D · d=8</th><th class="num">D vs A/B</th>
+    <th class="num">D · d=8</th><th class="num">E · d=1</th>
+    <th class="num">D vs E<br>(reach alone)</th>
     <th class="num">C · GNN</th></tr></thead>
     <tbody>{ladder}</tbody>
   </table></div>
@@ -313,7 +330,8 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
   <p>Perturbation growth is measured directly: perturb the initial state and track how the two
   trajectories separate per forecast window. The real atmosphere doubles synoptic errors in
   roughly <strong>1.5&ndash;2.5 days</strong>.</p>
-  <p>The three local-rule arms sit in or near that band ({dA}, {dB}, {dD} days). The control GNN
+  <p>The four local-rule arms sit in or near that band ({dA}, {dB}, {dE}, {dD} days) &mdash;
+  note reach makes error grow <em>faster</em>, {dD} days against the placebo's {dE}. The control GNN
   doubles in <strong>{dC} days</strong> &mdash; roughly twice as fast as the atmosphere, which
   is the signature of a model whose own states drift off-distribution, and matches its collapse
   beyond 72 h.</p>
@@ -359,9 +377,10 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
   <h2>Open, and honestly so</h2>
   <div class="cols prose">
     <div>
-      <h3>The placebo arm is still training</h3>
-      <p>E &mdash; parameter-identical to D, with no extra reach &mdash; is the arm that
-      separates reach from capacity. Until it lands, D vs A conflates the two.</p>
+      <h3>One seed per dilated arm</h3>
+      <p>The D&ndash;E gap is 3.9% against a 0.8% seed spread at 24 h. That trips the
+      pre-registered 5% gate, so seed 1 of both arms is training now. A consistent sign across
+      nine leads is reassuring but is not an error bar.</p>
       <h3>A diagnostic that did not work</h3>
       <p>The val-split probe was meant to separate rollout instability from over-regularisation.
       It compares a one-window prediction against a two-window target, so its two halves are not

@@ -18,12 +18,77 @@ z500 area-weighted RMSE (m²/s²), held-out test 2020, 24 h lead:
 | **B** | identical to A, **seed 1** | **173.3** |
 | **D** | local NCA + dilated ring at **8 hops** (reach 160/window) | **173.4** |
 | **E** | local NCA + dilated ring at **1 hop** (reach 20/window) — the placebo | **180.4** |
+| **D1** | as D, **seed 1** | **188.4** |
+| **E1** | as E, **seed 1** | **180.0** |
 | **C** | same-budget message-passing GNN | **291.2** |
 
-A and B differ only in random seed, so the **seed spread is 0.8%** at this lead. That is the
-yardstick every other number here is measured against.
+Two-seed means: **local 174.0 ±0.8%**, **`d=8` 180.9 ±8.3%**, **`d=1` 180.2 ±0.2%**.
+
+The seed spread is the yardstick every other number is measured against, and it is **not one
+number** — it varies by arm as well as by lead (§2, §8).
 
 ---
+
+## 2. RETRACTED: the reach effect did not survive seeds
+
+**Everything in this section below the line was written at n = 1 per dilated arm. The seed pair
+has since landed and killed the headline.** Kept in place rather than rewritten, because the
+retraction is the more useful record.
+
+### What the two-seed means say
+
+z500 RMSE, held-out test 2020, each arm the mean of two seeds, ± the within-arm spread:
+
+| lead | local (A,B) | `d=8` (D,D1) | `d=1` (E,E1) | d8 vs d1 | d8 vs local |
+|---|---|---|---|---|---|
+| 6 h | 130.2 ±1.9% | 129.6 ±0.5% | 132.2 ±0.8% | −2.0% | −0.5% |
+| 12 h | 110.2 ±0.1% | 111.9 ±6.1% | 111.6 ±0.9% | +0.3% | +1.5% |
+| **24 h** | **174.0 ±0.8%** | **180.9 ±8.3%** | **180.2 ±0.2%** | **+0.4%** | **+4.0%** |
+| 48 h | 318.8 ±0.4% | 334.7 ±8.7% | 331.9 ±0.6% | +0.8% | +5.0% |
+| 72 h | 460.9 ±0.1% | 487.7 ±8.5% | 481.5 ±0.1% | +1.3% | +5.8% |
+| 120 h | 738.8 ±1.2% | 790.5 ±6.9% | 779.0 ±0.2% | +1.5% | +7.0% |
+| 168 h | 948.3 ±0.8% | 1011.5 ±6.7% | 996.8 ±1.2% | +1.5% | +6.7% |
+
+**The pre-registered comparison comes back null.** Seed 0 alone said `d=8` beat `d=1` by 3.9% at
+24 h. The two-seed means say **+0.4%** — the wrong sign, and an order of magnitude smaller than
+the `d=8` arm's own 8.3% seed spread. **There is no measurable reach effect.**
+
+### The 3.9% was seed noise, and one arm is far noisier than the others
+
+| arm | 24 h seed spread |
+|---|---|
+| local (A/B) | 0.8% |
+| `d=1` placebo (E/E1) | **0.2%** |
+| `d=8` treatment (D/D1) | **8.3%** |
+
+`d=8` seed 1 scored 188.4 against seed 0's 173.4. That single run is the worst dilated result in
+the phase, and it is what turns a 3.9% lead into a 0.4% deficit. Reading `D` alone as "reach is
+worth 4%" was reading one lucky seed.
+
+**The selection metric completely failed to predict this.** On the 72 h val rollout the `d=8`
+seeds agreed to 0.29% (0.11434 vs 0.11401); on 24 h test RMSE they differ by 8.3%. A model
+selection metric that is stable to 0.3% can sit on top of a test quantity that moves 8%. That is
+a stronger version of the val/selection decoupling seen in 2c, and it means **selection-metric
+agreement is not evidence of seed stability** for anything else.
+
+### What actually holds
+
+Both dilated arms are **worse than the plain local model** — `d=8` by 4.0% and `d=1` by 3.6% at
+24 h, and the gap widens with lead. The fifth perception channel costs ~4% whatever radius it
+carries, and reach does not recover it.
+
+So the phase's conclusion is simpler, and stronger for the thesis, than the n = 1 reading:
+
+> **Adding a long-range channel to a strictly local rule does not improve forecasts. At 160 hops
+> per window — 1.7× the mesh diameter, effectively global — the model is no better than at 20,
+> and both are worse than not adding the channel at all.**
+
+The honest caveats remain: one radius, isotropic, n = 2, and the channel's cost is confounded
+with its near-collinearity to the existing Laplacian (below).
+
+---
+
+## 2b. The n = 1 reading, kept for the record
 
 ## 2. The result inverted once the placebo landed
 
@@ -96,17 +161,18 @@ drawn wrongly. The first was the receptive-field measurement (§5 below).
 The project's claim is that *a strictly local update rule is enough to forecast global weather*.
 The result is more interesting than either a clean confirmation or a refutation:
 
-- **Reach looks worth ~4% at 24 h.** Locality may not be free: a model that can see 160 mesh
-  hops per window scored better than the same model that can see 20. One seed per arm, so this
-  is the claim the running seed pair is there to confirm or kill.
-- **But the plain local model matches it.** A and B score 174.7 and 173.3 against D's 173.4,
-  with 3% fewer parameters and 10% less compute per window. The cheapest way to get D's
-  accuracy is not to add reach — it is to not add the channel that carries it.
-- **So locality is sufficient *at this budget*, and reach may not be free skill.** Both
-  statements sit together and neither is the headline on its own.
+The seed pair settled it (§2), and the answer is cleaner than the n = 1 reading suggested:
 
-What it does **not** license is "non-locality doesn't help". Nor does it yet license "reach is
-worth 4%" as a settled number — one seed per arm, one radius, isotropic (§6).
+- **Reach buys nothing measurable.** `d=8` (160 hops/window) against `d=1` (20 hops) is **+0.4%
+  at 24 h** on two-seed means — the wrong sign, and 20× smaller than `d=8`'s own 8.3% seed
+  spread.
+- **The channel that carries reach costs ~4%.** Both dilated arms sit above the plain local
+  model at every lead from 12 h out.
+- **So locality is sufficient at this budget**, and the earlier "reach is not free skill" reading
+  was one lucky seed.
+
+What this still does **not** license is "non-locality doesn't help" in general. It tested one
+radius, isotropically, at n = 2, on one mesh and one training budget (§6).
 
 ---
 

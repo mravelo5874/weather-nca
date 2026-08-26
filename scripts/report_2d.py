@@ -29,7 +29,18 @@ A = [131.5, 110.3, 174.7, 319.4, 461.2, 743.2, 952.3, 1217.3, 1474.6]   # 2c see
 B = [129.0, 110.2, 173.3, 318.2, 460.6, 734.3, 944.4, 1133.6, 1305.5]   # 2c seed 1
 C = [232.6, 137.9, 291.2, 711.1, 1014.0, 1390.4, 1594.9, 1746.9, 1983.5]  # control GNN
 D = [129.9, 108.5, 173.4, 320.2, 467.0, 763.2, 977.9, 1228.2, 1556.7]   # dilated d=8
-E = [131.7, 112.1, 180.4, 332.9, 481.6, 779.7, 1002.9, 1290.7, 1732.4]  # d=1 placebo
+E = [131.7, 112.1, 180.4, 332.9, 481.6, 779.7, 1002.9, 1290.7, 1732.4]  # d=1 placebo, s0
+D1 = [129.3, 115.3, 188.4, 349.2, 508.4, 817.9, 1045.2, 1298.5, 1650.5]  # d=8, seed 1
+E1 = [132.8, 111.1, 180.0, 330.9, 481.3, 778.4, 990.8, 1196.6, 1440.8]   # d=1, seed 1
+
+
+def mean2(x, y):
+    return [(a + b) / 2 for a, b in zip(x, y)]
+
+
+def spread2(x, y):
+    """Within-arm seed spread, as a percentage of the arm mean."""
+    return [100 * abs(a - b) / ((a + b) / 2) for a, b in zip(x, y)]
 PERSIST = [229.6, 364.7, 593.5, 829.7, 932.9, 1043.1, 1102.8, 1134.7, 1138.1]
 CLIM = [1105.8, 1106.2, 1104.6, 1102.7, 1099.3, 1092.4, 1099.6, 1102.0, 1097.1]
 
@@ -68,12 +79,12 @@ def build() -> str:
     rmse = linechart(
         [
             {"name": "C · GNN", "vals": C, "color": "var(--s2)", "width": 2},
-            {"name": "A · local", "vals": A, "color": "var(--s1)", "width": 2.6,
+            {"name": "local", "vals": mean2(A, B), "color": "var(--s1)", "width": 2.6,
              "emph": True},
-            {"name": "B · local s1", "vals": B, "color": "var(--s1)", "width": 1.8,
+            {"name": "d=8", "vals": mean2(D, D1), "color": "var(--s3)", "width": 2.6,
+             "emph": True},
+            {"name": "d=1", "vals": mean2(E, E1), "color": "var(--s3)", "width": 1.8,
              "dash": "6 4"},
-            {"name": "D · d=8", "vals": D, "color": "var(--s3)", "width": 2.6, "emph": True},
-            {"name": "E · d=1", "vals": E, "color": "var(--s3)", "width": 1.8, "dash": "6 4"},
             {"name": "persist.", "vals": PERSIST, "color": "var(--mut)", "width": 1.4,
              "dash": "5 4"},
             {"name": "clim.", "vals": CLIM, "color": "var(--mut)", "width": 1.4, "dash": "2 4"},
@@ -82,8 +93,7 @@ def build() -> str:
         xticks=[6, 24, 72, 168, 360], xlog=True, ymax=2100,
     )
 
-    spread = [(f"{h} h", round(100 * abs(a - b) / ((a + b) / 2), 1))
-              for h, a, b in zip(LEADS, A, B)]
+    spread = [(f"{h} h", round(v, 1)) for h, v in zip(LEADS, spread2(D, D1))]
     spread_chart = barchart(spread, h=330, pad_l=72, unit="%", fmt="{:.1f}",
                             zero_label="")
 
@@ -105,12 +115,16 @@ def build() -> str:
 
     ladder = "\n".join(
         f"<tr><td class='mono num'>{h}h</td><td class='mono num'>{a:.1f}</td>"
-        f"<td class='mono num'>{b:.1f}</td>"
-        f"<td class='mono num' style='color:var(--ink3)'>{100*abs(a-b)/((a+b)/2):.1f}%</td>"
-        f"<td class='mono num hero'>{d:.1f}</td><td class='mono num'>{e:.1f}</td>"
+        f"<td class='mono num' style='color:var(--ink3)'>&plusmn;{sa:.1f}%</td>"
+        f"<td class='mono num hero'>{d:.1f}</td>"
+        f"<td class='mono num' style='color:var(--ink3)'>&plusmn;{sd:.1f}%</td>"
+        f"<td class='mono num'>{e:.1f}</td>"
+        f"<td class='mono num' style='color:var(--ink3)'>&plusmn;{se:.1f}%</td>"
         f"<td class='mono num hero'>{100*(d/e-1):+.1f}%</td>"
         f"<td class='mono num'>{c:.1f}</td></tr>"
-        for h, a, b, c, d, e in zip(LEADS, A, B, C, D, E))
+        for h, a, sa, c, d, sd, e, se in zip(
+            LEADS, mean2(A, B), spread2(A, B), C, mean2(D, D1), spread2(D, D1),
+            mean2(E, E1), spread2(E, E1)))
 
     arms = "\n".join(
         f"<tr><td class='mono hero'>{t}</td><td class='mono'>{cfg}</td><td>{rule}</td>"
@@ -221,25 +235,25 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
 <header>
   <div class="eyebrow">Milestone 2 · Phase 2d · the thesis under test</div>
   <h1>Does a local rule need to see further?</h1>
-  <p class="lede">Give a strictly local weather model global reach and its forecasts barely
-  change &mdash; but that near-zero is two effects cancelling. The reach itself is worth
-  <b>4%</b>; the extra machinery needed to carry it costs almost exactly the same. Only the
-  placebo arm makes that visible.</p>
+  <p class="lede">No. Give a strictly local weather model global reach &mdash; 160 mesh hops
+  per 6-hour window, 1.7&times; the diameter of the planet's grid &mdash; and its forecasts do
+  not improve. One seed said reach was worth 4%; the second says <b>+0.4% the other way</b>,
+  against an 8.3% spread inside that arm.</p>
   <div class="meta mono">
     <span>held-out test <b>2020</b></span>
-    <span><b>5 of 5</b> arms evaluated</span>
+    <span><b>7 runs</b> · 2 seeds per arm</span>
     <span>NVIDIA L4 · bf16</span>
     <span>39 years · 28 channels · 10,242 nodes</span>
   </div>
 </header>
 
 <div class="stats">
-  <div class="stat"><div class="k">24 h z500 · local (A/B)</div><div class="v">174.7 / 173.3</div>
-    <div class="s">m²/s² · the two seeds</div></div>
-  <div class="stat"><div class="k">D vs E · reach alone</div><div class="v up">&minus;3.9%</div>
-    <div class="s">the pre-registered comparison</div></div>
-  <div class="stat"><div class="k">seed spread at 360 h</div><div class="v down">12.2%</div>
-    <div class="s">vs 0.8% at 24 h</div></div>
+  <div class="stat"><div class="k">24 h z500 · local, 2 seeds</div><div class="v">174.0</div>
+    <div class="s">m²/s² &plusmn;0.8%</div></div>
+  <div class="stat"><div class="k">reach alone · d=8 vs d=1</div><div class="v">+0.4%</div>
+    <div class="s">null &mdash; the pre-registered result</div></div>
+  <div class="stat"><div class="k">d=8 seed spread, 24 h</div><div class="v down">8.3%</div>
+    <div class="s">vs 0.2% for the placebo</div></div>
   <div class="stat"><div class="k">control GNN, 24 h</div><div class="v down">+67%</div>
     <div class="s">291.2 m²/s²</div></div>
 </div>
@@ -255,34 +269,32 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
     <tbody>{arms}</tbody>
   </table></div>
   <div class="note open">
-    <div class="eyebrow">The pre-registered comparison is D vs E, and E is unfinished</div>
+    <div class="eyebrow">The pre-registered comparison came back null</div>
     <p>D and E are identical in parameters and wall-clock and differ only in reach, so their
-    difference is attributable to reach alone. D against A is <em>not</em> that comparison: A
-    has 3% fewer parameters, and the sign of that confound is unknown &mdash; E now shows that
-    sign is <em>negative</em>, which is why gating this arm on a D win would have buried the
-    effect entirely.</p>
-    <p><b>One seed each.</b> The 3.9% gap sits under the pre-registered 5% threshold, so the
-    second seed of both arms is running. Until it lands this is n=1 against a 0.8% seed
-    spread &mdash; suggestive, not settled.</p>
+    difference is attributable to reach alone. On seed 0 that difference was 3.9%, and it was
+    reported as real. On two seeds it is <b>+0.4%</b> &mdash; the wrong sign &mdash; against an
+    <b>8.3% spread within the d=8 arm itself</b>. Reach buys nothing measurable here.</p>
+    <p>The design held even though the first reading did not. The placebo caught the parameter
+    confound, and the pre-registered seed gate &mdash; which fired precisely <em>because</em> the
+    gap was under 5% &mdash; caught the noise. Both guards did the job they were put there for.</p>
   </div>
 </section>
 
 <section>
   <hr class="rule">
   <div class="eyebrow">Forecast skill</div>
-  <h2>Two effects, cancelling</h2>
+  <h2>The reach effect did not survive a second seed</h2>
   <div class="prose">
-  <p>At 24 hours the two local seeds score <strong>174.7</strong> and <strong>173.3</strong>.
-  The globally-connected model scores <strong>173.4</strong> &mdash; between them. Read alone,
-  that says reach buys nothing.</p>
-  <p>The placebo says otherwise. Arm E carries the same fifth perception channel as D and the
-  same 1,060,412 parameters, but its ring sits at 1 hop, so it adds <em>no reach at all</em>.
-  It scores <strong>180.4</strong> &mdash; <strong>3.7% worse than the plain local model</strong>.
-  The extra channel, on its own, hurts.</p>
-  <p>So <strong>D beats E by 3.9%</strong>, and does so at <em>every one of the nine lead
-  times</em>, by 1.4% to 11.3%. Reach is doing real work &mdash; roughly enough to pay back what
-  the architecture change costs, and no more. Against a 0.8% seed spread at 24 h, a consistent
-  4% gap is not noise.</p>
+  <p>On one seed, the 8-hop arm beat its own no-reach placebo by <strong>3.9%</strong> at 24 h,
+  consistently across all nine leads. Against a 0.8% seed spread that looked like a real effect,
+  and it was reported as one.</p>
+  <p>The second seed of that arm scored <strong>188.4</strong> against the first's 173.4 &mdash;
+  an <strong>8.3% within-arm spread</strong>, ten times the local model's. On two-seed means the
+  comparison is <strong>+0.4%</strong>: the wrong sign, and twenty times smaller than the arm's
+  own noise. <strong>There is no measurable reach effect.</strong></p>
+  <p>What does hold is that <em>both</em> dilated arms are worse than the plain local model
+  &mdash; by 4.0% and 3.6% at 24 h, widening with lead. The fifth channel costs about 4%
+  whatever radius it carries, and reach does not recover it.</p>
   <p>The control GNN is in another regime entirely: <strong>+67% at 24 h</strong>, and worse
   than persistence at 6 h and beyond 72 h. Its measured receptive field is 9 hops, less than
   the local model's 20, so it was never a test of non-locality.</p>
@@ -293,10 +305,10 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
     A and B share a colour because they are the same model at different seeds.</figcaption>
   </figure>
   <div class="tbl"><table>
-    <thead><tr><th class="num">lead</th><th class="num">A · local s0</th>
-    <th class="num">B · local s1</th><th class="num">seed spread</th>
-    <th class="num">D · d=8</th><th class="num">E · d=1</th>
-    <th class="num">D vs E<br>(reach alone)</th>
+    <thead><tr><th class="num">lead</th><th class="num">local<br>mean of 2</th>
+    <th class="num">spread</th><th class="num">d=8<br>mean of 2</th>
+    <th class="num">spread</th><th class="num">d=1<br>mean of 2</th>
+    <th class="num">spread</th><th class="num">d8 vs d1<br>(reach alone)</th>
     <th class="num">C · GNN</th></tr></thead>
     <tbody>{ladder}</tbody>
   </table></div>
@@ -317,8 +329,10 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
   </div>
   <figure>
     {spread}
-    <figcaption>|A − B| as a percentage of their mean, by lead time. Same model, same data,
-    same recipe; only the random seed differs.</figcaption>
+    <figcaption>Within-arm seed spread for the <strong>d=8</strong> arm, by lead time. Same
+    model, same data, same recipe; only the random seed differs. At 24 h it is 8.3%, against
+    0.8% for the local model and 0.2% for the placebo &mdash; which is why a 3.9% single-seed
+    gap meant nothing.</figcaption>
   </figure>
 </section>
 
@@ -377,10 +391,11 @@ footer {{ margin-top:72px; padding-top:24px; border-top:1px solid var(--rule);
   <h2>Open, and honestly so</h2>
   <div class="cols prose">
     <div>
-      <h3>One seed per dilated arm</h3>
-      <p>The D&ndash;E gap is 3.9% against a 0.8% seed spread at 24 h. That trips the
-      pre-registered 5% gate, so seed 1 of both arms is training now. A consistent sign across
-      nine leads is reassuring but is not an error bar.</p>
+      <h3>The selection metric did not predict this</h3>
+      <p>On the 72 h validation rollout the two d=8 seeds agreed to <strong>0.29%</strong>. On
+      24 h test RMSE they differ by <strong>8.3%</strong>. Selection-metric agreement is not
+      evidence of seed stability for anything else &mdash; a stronger form of the val/selection
+      decoupling seen in phase 2c.</p>
       <h3>A diagnostic that did not work</h3>
       <p>The val-split probe was meant to separate rollout instability from over-regularisation.
       It compares a one-window prediction against a two-window target, so its two halves are not

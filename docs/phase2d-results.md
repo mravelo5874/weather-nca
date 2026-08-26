@@ -29,17 +29,11 @@ number** — it varies by arm as well as by lead (§2, §8).
 
 ---
 
-## 2. RETRACTED: the reach effect did not survive seeds
+## 2. The result: reach buys nothing measurable
 
-**Everything in this section below the line was written at n = 1 per dilated arm. The seed pair
-has since landed and killed the headline.** Kept in place rather than rewritten, because the
-retraction is the more useful record.
+Each arm is the mean of two seeds; ± is the within-arm seed spread.
 
-### What the two-seed means say
-
-z500 RMSE, held-out test 2020, each arm the mean of two seeds, ± the within-arm spread:
-
-| lead | local (A,B) | `d=8` (D,D1) | `d=1` (E,E1) | d8 vs d1 | d8 vs local |
+| lead | local (A,B) | `d=8` (D,D1) | `d=1` (E,E1) | **d8 vs d1**<br>*reach alone* | d8 vs local |
 |---|---|---|---|---|---|
 | 6 h | 130.2 ±1.9% | 129.6 ±0.5% | 132.2 ±0.8% | −2.0% | −0.5% |
 | 12 h | 110.2 ±0.1% | 111.9 ±6.1% | 111.6 ±0.9% | +0.3% | +1.5% |
@@ -49,114 +43,53 @@ z500 RMSE, held-out test 2020, each arm the mean of two seeds, ± the within-arm
 | 120 h | 738.8 ±1.2% | 790.5 ±6.9% | 779.0 ±0.2% | +1.5% | +7.0% |
 | 168 h | 948.3 ±0.8% | 1011.5 ±6.7% | 996.8 ±1.2% | +1.5% | +6.7% |
 
-**The pre-registered comparison comes back null.** Seed 0 alone said `d=8` beat `d=1` by 3.9% at
-24 h. The two-seed means say **+0.4%** — the wrong sign, and an order of magnitude smaller than
-the `d=8` arm's own 8.3% seed spread. **There is no measurable reach effect.**
+**The pre-registered comparison (`d=8` vs `d=1`, identical in parameters and compute, differing
+only in reach) is +0.4% at 24 h** — the wrong sign, and twenty times smaller than the `d=8`
+arm's own 8.3% seed spread. There is no measurable reach effect.
 
-### The 3.9% was seed noise, and one arm is far noisier than the others
+**What does hold:** both dilated arms are worse than the plain local model — 4.0% and 3.6% at
+24 h, widening with lead. The fifth perception channel costs ~4% whatever radius it carries,
+and reach does not recover it.
 
-| arm | 24 h seed spread |
-|---|---|
-| local (A/B) | 0.8% |
-| `d=1` placebo (E/E1) | **0.2%** |
-| `d=8` treatment (D/D1) | **8.3%** |
+> **Adding a long-range channel to a strictly local update rule does not improve forecasts.
+> At 160 hops per window — 1.7× the mesh diameter, effectively global — the model is no better
+> than at 20 hops, and both are worse than not adding the channel at all.**
 
-`d=8` seed 1 scored 188.4 against seed 0's 173.4. That single run is the worst dilated result in
-the phase, and it is what turns a 3.9% lead into a 0.4% deficit. Reading `D` alone as "reach is
-worth 4%" was reading one lucky seed.
-
-**The selection metric completely failed to predict this.** On the 72 h val rollout the `d=8`
-seeds agreed to 0.29% (0.11434 vs 0.11401); on 24 h test RMSE they differ by 8.3%. A model
-selection metric that is stable to 0.3% can sit on top of a test quantity that moves 8%. That is
-a stronger version of the val/selection decoupling seen in 2c, and it means **selection-metric
-agreement is not evidence of seed stability** for anything else.
-
-### What actually holds
-
-Both dilated arms are **worse than the plain local model** — `d=8` by 4.0% and `d=1` by 3.6% at
-24 h, and the gap widens with lead. The fifth perception channel costs ~4% whatever radius it
-carries, and reach does not recover it.
-
-So the phase's conclusion is simpler, and stronger for the thesis, than the n = 1 reading:
-
-> **Adding a long-range channel to a strictly local rule does not improve forecasts. At 160 hops
-> per window — 1.7× the mesh diameter, effectively global — the model is no better than at 20,
-> and both are worse than not adding the channel at all.**
-
-The honest caveats remain: one radius, isotropic, n = 2, and the channel's cost is confounded
-with its near-collinearity to the existing Laplacian (below).
+Caveats that remain: one radius, isotropic, n = 2, one mesh, one training budget (§6). And the
+channel's ~4% cost is confounded with its near-collinearity to the existing Laplacian (§3).
 
 ---
 
-## 2b. The n = 1 reading, kept for the record
+## 3. What was retracted, and what it cost to find out
 
-## 2. The result inverted once the placebo landed
+**On seed 0 alone, `d=8` beat `d=1` by 3.9% at 24 h — consistently across all nine leads.**
+Against a 0.8% seed spread that read as a real effect, and it was written up and reported as
+one, with a narrative on top: the fifth channel costs ~4%, reach pays it back, two effects
+cancelling.
 
-**Read against A alone, D looks like a null.** 173.4 sits between the two local seeds
-(174.7, 173.3). The obvious reading — the one written up and reported before E finished — is
-that giving a strictly local model global reach buys nothing.
+Then `d=8` seed 1 scored **188.4** against seed 0's **173.4**. One run, an **8.3% within-arm
+spread** — ten times the local model's — and the 3.9% lead becomes a 0.4% deficit.
 
-**The placebo says that null is two effects cancelling.**
+**Three things this cost, worth recording so they are not repeated:**
 
-E carries the *identical* fifth perception channel as D and the *identical* 1,060,412
-parameters, but its ring sits at 1 hop, so it adds **no reach at all**. It scores **180.4 —
-3.7% worse than the plain local model**. The extra channel, on its own, hurts: 30,720 more
-input weights to fit and one more input the update MLP has to learn to ignore.
+1. **"Consistent across nine leads" is not nine observations.** A rollout is one trajectory
+   family from one set of weights, so a seed's idiosyncrasy propagates through every lead. The
+   nine-lead consistency was close to *one* correlated observation, and it was used as if it
+   were nine.
+2. **The decomposition was interpretation, not measurement.** `d=8` vs `d=1` isolates radius
+   cleanly. "The channel costs 3.7%" came from `d=1` vs the local model, where the 1-hop ring is
+   a uniform-weight Laplacian sitting beside the existing cotangent one — near-collinear inputs.
+   That half was never clean, and the tidy story was built on it.
+3. **Selection-metric agreement was mistaken for seed stability.** See §8; this is the most
+   transferable of the three.
 
-So the comparison that carries the result — same parameters, same wall-clock, **only reach
-differs** — is:
+**The design held even though the reading did not.** The placebo caught the parameter confound —
+and would have been skipped entirely under the first version of the plan, which gated it on
+`d=8` winning. The pre-registered seed gate fired *precisely because* the gap was under 5%,
+which is what surfaced the noise. Both guards did the job they were put there for. The failure
+was in believing n = 1 before they finished.
 
-| lead | D · reach 160 | E · reach 20 | D vs E |
-|---|---|---|---|
-| 6 h | 129.9 | 131.7 | −1.4% |
-| 12 h | 108.5 | 112.1 | −3.2% |
-| **24 h** | **173.4** | **180.4** | **−3.9%** |
-| 48 h | 320.2 | 332.9 | −3.8% |
-| 72 h | 467.0 | 481.6 | −3.0% |
-| 120 h | 763.2 | 779.7 | −2.1% |
-| 168 h | 977.9 | 1002.9 | −2.5% |
-| 240 h | 1228.2 | 1290.7 | −4.8% |
-| 360 h | 1556.7 | 1732.4 | −10.1% |
-
-**D beats E at every one of the nine leads.** That is consistent with reach doing real work —
-roughly enough to pay back what the architecture change costs, and no more.
-
-**How much weight the nine-lead consistency carries: less than it looks.** These are not nine
-independent observations. A rollout is one trajectory family from one set of weights, so a
-seed's idiosyncrasy propagates through every lead — the nine leads are closer to **one
-correlated observation** than to nine. With one seed per arm against a 0.8% seed spread measured
-on a *different* architecture, 3.9% is suggestive and not established. The seed pair is running;
-§7.
-
-### The decomposition is shakier than the 3.9%
-
-D vs E cleanly isolates ring **radius**: same parameters, same compute, one knob. That number is
-solid modulo seeds.
-
-The other half of the story — "the fifth channel costs 3.7%" — comes from E vs A, and it is
-*not* clean. E's ring at 1 hop is a **uniform-weight Laplacian sitting alongside the existing
-cotangent Laplacian**: two near-collinear inputs. So E's deficit may be specific to feeding the
-update MLP a near-duplicate channel rather than to added capacity in general, and a placebo
-carrying an uninformative-but-non-redundant channel might cost nothing at all.
-
-The clean statement of the result is therefore: **increasing the ring radius from 1 to 8 hops
-improves 24 h z500 RMSE by 3.9%.** The "two effects cancelling" narrative is interpretation
-layered on one clean measurement and one confounded one.
-
-### Why the earlier design would have missed this
-
-The first version of this experiment **gated E on D winning**, on the argument that D's extra
-3% of parameters made a D loss "conservative". That was wrong twice over: the sign of the
-parameter confound was unknown, and it turns out to be **negative**. Gating E would have buried
-a real ~4% reach effect under a fake null, and the write-up would have claimed "locality is
-sufficient" on the strength of it.
-
-This is the second time in this phase that a control caught a conclusion that was about to be
-drawn wrongly. The first was the receptive-field measurement (§5 below).
-
----
-
-## 3. What this means for the thesis
+## 4. What this means for the thesis
 
 The project's claim is that *a strictly local update rule is enough to forecast global weather*.
 The result is more interesting than either a clean confirmation or a refutation:
@@ -176,7 +109,7 @@ radius, isotropically, at n = 2, on one mesh and one training budget (§6).
 
 ---
 
-## 4. Error growth
+## 5. Error growth
 
 Sustained per-window perturbation growth, converted to error-doubling time. The real atmosphere
 doubles synoptic-scale errors in roughly 1.5–2.5 days.
@@ -205,7 +138,7 @@ the same model. Growth-rate comparisons need the same error bars the RMSE compar
 
 ---
 
-## 5. The GNN control was never a locality test
+## 6. The GNN control was never a locality test
 
 The same-budget message-passing GNN scores **291.2 at 24 h (+67%)**, is worse than persistence
 at 6 h and beyond 72 h, and doubles error in under a day.
@@ -223,7 +156,7 @@ long reach. Full table in `configs/phase2d_control.yaml`.
 
 ---
 
-## 6. What this does not test
+## 7. What this does not test
 
 - **The long-range channel is isotropic.** `mean(ring) − centre` is scalar diffusion; the local
   stencil additionally carries direction via ∇x and ∇y. So this measures the value of
@@ -237,23 +170,31 @@ long reach. Full table in `configs/phase2d_control.yaml`.
 
 ---
 
-## 7. Status, and the pre-registered gate
+## 8. The pre-registered gate, and how it resolved
 
-The gate written in `phase2d-experiment.md` §6 **before** any dilated run finished:
+The rule, written in `phase2d-experiment.md` §6 **before** any dilated run finished:
 
 > Seeds 1 of both run **if and only if** the seed-0 gap is under 5% on the test-2020 24 h z500
 > RMSE.
 
-The gap is **3.9%** — under the threshold. **Seed 1 of both dilated arms is therefore
-training**, exactly the branch §6 said to expect for a small-gap outcome. Until it lands:
+The seed-0 gap was **3.9%** — under the threshold — so both second seeds ran. They cost ~$43 and
+they overturned the result (§2, §3). The gate was written expecting to fire on a *null* branch;
+it fired on what looked like a positive one, and that is exactly when it was most needed.
 
-- D−E is **n = 1 per arm** against a 0.8% seed spread at 24 h. A consistent sign across nine
-  leads is reassuring; it is not an error bar.
-- The long-lead half of that consistency is **inside the noise regardless** — see §8.
+**Per-arm seed spread at 24 h**, the number that made the difference:
+
+| arm | spread |
+|---|---|
+| local (A/B) | 0.8% |
+| `d=1` placebo (E/E1) | 0.2% |
+| **`d=8` treatment (D/D1)** | **8.3%** |
+
+Seed spread is **not a property of the phase** — it is a property of the arm. Nothing in the
+local or placebo arms predicted that the treatment arm would be ten times noisier.
 
 ---
 
-## 8. The methodological finding: the noise floor is not one number
+## 9. The methodological finding: the noise floor is not one number
 
 The selection metric put seed-to-seed spread at **0.21%**, and that figure carried planning
 weight through this whole milestone. On the evaluation metric it holds only at short leads:
@@ -271,7 +212,7 @@ quoted as *the* noise floor again.
 
 ---
 
-## 9. Two-metre temperature: a metric artefact, confirmed
+## 10. Two-metre temperature: a metric artefact, confirmed
 
 Phase 2c reported 2 m temperature at **−31% skill** at 24 h — the only channel worse than
 persistence, and an apparent failure of the solar-forcing conditioning. Scoring at every 6 h
@@ -322,7 +263,7 @@ undertrained. `scripts/diag_2t_solar.py`, `diag_2t_solar.json`.
 
 ---
 
-## 10. A diagnostic that did not work, and was deleted
+## 11. A diagnostic that did not work, and was deleted
 
 `scripts/diag_val_split.py` was written to separate two readings of the GNN's inverted
 train/val relationship: rollout instability versus over-regularisation. It compared a
@@ -342,7 +283,7 @@ in two independent estimates before anyone measured it.
 
 ---
 
-## 11. Before phase 3a
+## 12. Before phase 3a
 
 1. **Finish the seed pair** (running; ~48 h) and re-state §2 with error bars.
 2. **Decide the 3a warm-start architecture.** `configs/phase3a_crps.yaml` sets

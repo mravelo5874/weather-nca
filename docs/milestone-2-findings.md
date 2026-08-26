@@ -3,7 +3,9 @@
 Recorded as phases complete. Everything here is measured on the local GTX 1660 Ti (6 GB) unless
 stated otherwise; re-measure on the cloud instance before budgeting.
 
-Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ · 2c ✅ (best model so far) · 2d–5 not started.**
+Status: **phase 0 ✅ · 2a ✅ · 2b ✅ · 2b′ ❌ · 2b-pushforward ✅ · 2c ✅ (the model) · 2d ✅ (null: reach buys nothing) · 3a–3b not started.**
+
+Phase 2d results: `docs/phase2d-results.md`. Plan for the rest of the project, costed against the remaining budget: `docs/remaining-plan.md`.
 
 ---
 

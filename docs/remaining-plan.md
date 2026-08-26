@@ -78,10 +78,14 @@ it is retired.
 It **false-fires on the default smoke** (177 optimizer steps). Do not read a smoke failure there
 as a broken model.
 
-### 3a.1 — the $7 probe (do this first)
+### 3a.1 — the $8/seed probe (do this first)
 
-Warm-start from the phase-2c checkpoint, fine-tune on a **2-year** split, full 15 epochs at
-`m_train = 4`. Answers the calibration question at 1/20 the price.
+Warm-start from the phase-2c checkpoint, fine-tune on a **2-year** split, 16 epochs at
+`m_train = 4` with pushforward on. Answers the calibration question at ~1/17 the price of the
+full-data run: **~9.5 h and ~$8 per seed, ~$17 for the required pair.**
+
+Design, success criteria and the failure-reading rules are pre-registered in
+`docs/phase3a-experiment.md`.
 
 **Pre-register before running:**
 
@@ -152,13 +156,14 @@ All three now mirror 2c explicitly, with the reason recorded in the config so no
 "simplifies" them back. `tests/test_checkpoint.py` asserts the arch hashes match and the weight
 decay agrees; verified by reverting the fix and watching the test fail.
 
-**Two left as decisions, not defaults** — flagged in the config rather than silently mirrored:
+**Two decided 2026-08-26**, and recorded in the config with their reasoning:
 
-- **`pushforward`.** 2c trained with it on; base defaults it off, so 3a currently drops it. That
-  changes what the fine-tune is asked to do — CRPS from clean analysis states rather than from
-  the model's own. Plausibly right for a probabilistic phase; it should be chosen.
-- **`epochs: 15`** against 2c's 8, with no measurement behind it, on a warm-start fine-tune.
-  Cost scales linearly with it.
+- **`pushforward: true`**, mirroring 2c — so the loss is the only thing that changes. Cost is
+  ~8% here, not ~33%, because the pushforward step is deterministic and is not multiplied by
+  `m_train`. Known risk: its 6 h regression could distort short-lead spread.
+- **`epochs: 16`**, double 2c's 8, because the zero-initialised FiLM pathway must grow from
+  nothing. On the 2-year probe that is 5,840 optimizer steps — few enough that §3a.1b's
+  budget-vs-design discriminator is load-bearing.
 
 Still unaudited: **`lr: 1e-4`** has no recorded provenance. 2c's learning rate came from a
 fixed-LR sweep; this one was "dropped an order of magnitude". If the probe misbehaves, suspect
@@ -263,7 +268,7 @@ Two things to carry forward:
 
 **Then spend:**
 
-7. **The $7 two-year probe, two seeds ($14).**
+7. **The two-year probe, two seeds (~$17).**
 8. **Decide from the probe**, not from a plan written before it.
 
 3b is **optional even if 3a calibrates** (§4). A cheap calibrated ensemble from a 1 M-parameter

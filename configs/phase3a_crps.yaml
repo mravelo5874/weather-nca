@@ -47,18 +47,32 @@ ensemble:
   m_test: 50                     # M=50 is the one to trust.
 
 train:
-  # DECISION REQUIRED before running -- both of these are inherited, not chosen:
+  # Both of the following were DECIDED on 2026-08-26, not inherited.
   #
-  #   epochs: 15   against 2c's 8, with no measurement behind it. This is a warm-start
-  #                fine-tune at lr 1e-4, not training from scratch. 15 was written down early
-  #                and never tested. Cost scales linearly with it (see docs/remaining-plan.md).
+  #   epochs: 16   Double phase 2c's 8. The FiLM projection is zero-initialised, so the entire
+  #                noise pathway has to grow from nothing during this fine-tune; the previous
+  #                value of 15 had no measurement behind it either, and doubling 2c's budget is
+  #                at least a stated rationale. On the 2-year probe split this is ~5,840
+  #                optimizer steps -- which is few enough that a calibration failure could be a
+  #                BUDGET result rather than a design one. See docs/phase3a-experiment.md for
+  #                the pre-registered discriminator between those two readings.
   #
-  #   pushforward  2c trained with it ON; base defaults it OFF, so 3a currently drops it. That
-  #                changes what the fine-tune is being asked to do -- CRPS from clean analysis
-  #                states rather than from the model's own. It may be the right call for a
-  #                probabilistic phase, but it should be a decision. Left at the base default
-  #                deliberately, flagged rather than silently mirrored.
-  epochs: 15
+  #   pushforward  ON, mirroring 2c. Not because pushforward is better in the abstract -- it
+  #                measurably HURTS 6 h skill (+43% in 2b) -- but because this phase must change
+  #                ONE thing. The warm-start checkpoint spent 8 epochs learning to operate on
+  #                states it generated itself; turning pushforward off would add the CRPS
+  #                objective *and* yank the state distribution back to clean analyses at the
+  #                same time. That is the confound that spoiled 2b' (solar forcing tangled with
+  #                sub-step count) and 2d's GNN control (four variables at once).
+  #
+  #                Cost is ~8% here, not the ~33% it would be at m=1: the pushforward step
+  #                passes z=None, so it is a single deterministic forward that is NOT multiplied
+  #                by m_train, and all members branch from the state it produces.
+  #
+  #                Known risk to watch: pushforward's 6 h regression could distort short-lead
+  #                spread. If the probe calibrates at 72 h but not at 24 h, suspect this first.
+  epochs: 16
+  pushforward: true
   lr: 1.0e-4                     # dropped an order of magnitude from the deterministic phases.
                                  # Provenance: none. 2c's lr came from an actual fixed-LR sweep;
                                  # this did not. If the probe misbehaves, suspect this first.

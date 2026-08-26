@@ -276,3 +276,68 @@ def test_phase3a_keeps_the_weight_decay_that_fixed_phase2c():
     crps = load_config("configs/phase3a_crps.yaml")
     assert crps.train.weight_decay == nca.train.weight_decay, (
         f"3a weight_decay {crps.train.weight_decay} != 2c's {nca.train.weight_decay}")
+
+
+def test_phase3a_probe_resolves_onto_the_cache_that_already_exists():
+    """The probe's whole point is that it needs no new download.
+
+    `cache_tag()` hashes the years of ALL THREE splits together, so changing any one of them
+    invalidates train and val as well -- a ~6.3 GB re-download for a run budgeted at $17. If an
+    edit drifts these years, this fails before anyone waits on a cache.
+    """
+    from wnca.config import load_config
+    from wnca.data.cache import cache_tag
+
+    probe = load_config("configs/phase3a_probe.yaml")
+    assert tuple(probe.data.train_years) == (2015, 2016)
+    assert tuple(probe.data.val_years) == (2017,)
+    assert tuple(probe.data.test_years) == (2018,)
+    assert cache_tag(probe) == "era5_sub5_c28_2f61cc03ea", (
+        "probe no longer points at the cached 2-year split; it would need a fresh download")
+
+
+def test_phase3a_probe_changes_only_the_split():
+    """The probe must differ from its parent in the DATA and nothing else.
+
+    It exists to be a cheap go/no-go for `phase3a_crps.yaml`, which is worthless if the two
+    drift apart: a probe that passes on different training decisions than the run it is
+    clearing has measured nothing about that run. `extends:` gives inheritance, this asserts it
+    was not overridden.
+    """
+    from wnca.config import load_config
+
+    parent = load_config("configs/phase3a_crps.yaml")
+    probe = load_config("configs/phase3a_probe.yaml")
+
+    assert probe.arch_hash() == parent.arch_hash()
+    for field in ("epochs", "pushforward", "lr", "weight_decay", "warm_start", "seed"):
+        assert getattr(probe.train, field) == getattr(parent.train, field), field
+    for field in ("m_train", "m_val", "m_test"):
+        assert getattr(probe.ensemble, field) == getattr(parent.ensemble, field), field
+    assert probe.data.train_years != parent.data.train_years
+
+
+def test_phase3a_warm_start_points_at_a_real_checkpoint():
+    """`warm_start: null` meant 3a would train from scratch while claiming to fine-tune 2c.
+
+    Asserting the file exists would fail on a fresh clone, so this asserts the config names a
+    2c checkpoint -- the thing that was actually missing.
+    """
+    from wnca.config import load_config
+
+    ws = load_config("configs/phase3a_crps.yaml").train.warm_start
+    assert ws, "3a has no warm_start; it would train from scratch, not fine-tune 2c"
+    assert "phase2c" in ws and ws.endswith(".pt"), ws
+
+
+def test_smoke_never_warm_starts():
+    """Smoke builds a 64-dim, n_sub=3 model; no full-size checkpoint fits it.
+
+    Without this, `make smoke` on any warm-starting phase (3a, 3b) fails for a reason that has
+    nothing to do with the config being wrong -- which defeats the point of smoking before a
+    phase goes to cloud.
+    """
+    from wnca.config import load_config
+
+    assert load_config("configs/phase3a_probe.yaml", smoke=True).train.warm_start is None
+    assert load_config("configs/phase3a_crps.yaml", smoke=True).train.warm_start is None

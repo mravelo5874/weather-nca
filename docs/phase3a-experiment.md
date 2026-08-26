@@ -43,6 +43,7 @@ differentiator for the write-up.
 | lr | 1e-4 |
 | pushforward | **ON**, mirroring 2c |
 | probe split | **2 years** — 365 batches/epoch, 5,840 optimizer steps |
+| configs | `phase3a_probe.yaml` (probe) `extends:` `phase3a_crps.yaml` (scale-up) |
 
 ### Two decisions taken deliberately, not inherited
 
@@ -61,7 +62,26 @@ Cost is ~8%, not the ~33% it would be at `m=1`: the pushforward step passes `z=N
 single deterministic forward that is **not** multiplied by `m_train`, and all members branch
 from the state it produces.
 
-### A launch-blocking bug found while auditing this config
+### The probe split is contaminated, and the rule that follows
+
+The probe reuses phase 2b's years — train 2015–16 / val 2017 / test 2018 — because that is the
+only complete multi-year ERA5 cache on disk, and `cache_tag()` hashes all three splits together
+so changing one costs a fresh ~6.3 GB download of the other two.
+
+The cost: **probe test 2018 was 2c's validation year**, and **probe val 2017 sits inside 2c's
+train range**. The warm-start model has seen both, so the probe's skill term is mildly
+optimistic, and since spread–skill is spread ÷ skill that biases the ratio **up — toward the
+0.8–1.25 band being tested for.**
+
+> **A probe pass is not a reportable calibration result.** The quotable spread–skill number comes
+> from the scale-up on the clean split (`phase3a_crps.yaml`: train 1979–2017 / val 2018 /
+> test 2020). If the probe passes and the budget runs out, report it as a probe with this caveat
+> attached — do not promote it.
+
+A probe **failure** is unaffected: the leakage biases toward passing, so a miss here is a miss on
+a clean split too, and §5 applies unchanged.
+
+### Two launch-blocking bugs found while auditing this config
 
 3a set only `stochastic` and `noise_dim` and inherited the rest from `base.yaml`. That gave
 `spectral_norm: false` against 2c's `true`, so `arch_hash` differed (`5ef20621…` vs
@@ -72,6 +92,18 @@ silently reverted `weight_decay` to 1e-5, the value 2c measured as ~11,000× too
 Both fixed and covered by tests in `tests/test_checkpoint.py`, verified by reverting the fix and
 watching the arch test fail. Recorded here because it is the third config in a row whose
 unexamined defaults would have cost a paid run.
+
+**Second: the eval path crashes on this phase.** Smoking `phase3a_probe.yaml` end-to-end,
+`wnca eval` died with `ValueError: state.solar_forcing is enabled but no forcing was supplied to
+the rollout`. `eval/spectrum.py:member_spectra` never passed `forcing=` — it runs only when
+`cfg.model.stochastic`, so **3a is the first config that is both stochastic and forced**, and
+nothing had ever executed that combination. `evaluate` and `perturbation_growth` both handle
+forcing; this one stage did not.
+
+It would have crashed **after** training, i.e. having already spent ~9.5 h of paid instance per
+seed. Fixed, with three regression tests in `tests/test_eval_spectrum.py`. Also cleared
+`warm_start` on the smoke path, without which no warm-starting phase could be smoked at all —
+a 64-dim smoke model cannot load a full-size checkpoint.
 
 ---
 

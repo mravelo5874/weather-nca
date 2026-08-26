@@ -1,0 +1,47 @@
+# Phase 3a PROBE -- the 2-year go/no-go before spending on a full-split CRPS run.
+#
+# This is `phase3a_crps.yaml` with ONE thing changed: the data split. Every design decision --
+# epochs 16, pushforward ON, spectral_norm true, weight_decay 0.1, the ensemble sizes, the
+# warm-start checkpoint -- lives in the parent and is inherited, so the two configs cannot drift
+# apart. Scaling up after a pass means running the parent, not editing this file.
+#
+# Cost: ~9.5 h and ~$8 per seed on an L4; ~$17 for the two seeds the pre-registration requires
+# (docs/phase3a-experiment.md section 3). Against ~$50 remaining.
+#
+# ---------------------------------------------------------------------------------------
+# WHY THESE YEARS, AND THE CAVEAT THAT COMES WITH THEM
+#
+# Identical to phase 2b's split, which is the ONLY multi-year ERA5 cache that exists complete
+# and normalized on the local disk (era5_sub5_c28_2f61cc03ea, 6.3 GB). `cache_tag()` hashes the
+# years of all three splits together, so changing any one of them invalidates the whole cache and
+# costs a fresh ~6.3 GB download of train and val as well -- not just the new test year.
+#
+# The caveat, stated because it is the kind of thing that quietly flatters a result:
+#
+#   probe test 2018  was phase 2c's VALIDATION year -- the year its checkpoints were selected on.
+#   probe val  2017  is inside phase 2c's TRAIN range (1979-2017).
+#
+# So the warm-start model has seen both, and the probe's skill term is mildly optimistic. Since
+# spread-skill is spread / skill, that biases the ratio UP -- toward the 0.8-1.25 band being
+# tested for. The bias is second-order (2c selected on 2018 with a deterministic metric, and this
+# model is 16 epochs of CRPS fine-tuning away from it) but it is not zero and it points the
+# convenient way.
+#
+# Accepted here because a probe's job is go/no-go, not to produce the quotable number. The rule
+# that follows from it:
+#
+#   A PROBE PASS IS NOT A REPORTABLE CALIBRATION RESULT. The headline spread-skill number comes
+#   from the scale-up on the clean split (train 1979-2017 / val 2018 / test 2020), which is what
+#   the parent config already specifies. If the probe passes and there is no budget to scale up,
+#   report it as a probe with this caveat attached -- do not promote it.
+#
+# A probe FAILURE is not weakened by any of this: leakage biases toward passing, so a miss on
+# this split is a miss on a clean one too, and section 5 of the experiment doc applies unchanged.
+extends: phase3a_crps.yaml
+
+phase: phase3a_probe
+
+data:
+  train_years: [2015, 2016]      # 2,924 steps -> 365 batches/epoch at batch_size 8
+  val_years: [2017]              # 5,840 optimizer steps over 16 epochs
+  test_years: [2018]             # see the caveat above before quoting anything measured here

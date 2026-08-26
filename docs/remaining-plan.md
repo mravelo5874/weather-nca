@@ -272,7 +272,12 @@ Two things to carry forward:
 
 **Then spend:**
 
-7. **The two-year probe, two seeds (~$17).**
+7. **The two-year probe, two seeds (~$17).** Ready to launch: `configs/phase3a_probe.yaml`,
+   warm-start wired to the 2c checkpoint (now pulled local, `arch_hash 5ef20621bbf047bb` matching
+   the config), split resolving onto the cache that already exists, smoked end to end. Seed 1 is
+   `--set train.seed=1`. **Cloud only** — 3a OOMs the local 6 GB card at stock batch size.
+   Read the probe-contamination caveat in `phase3a-experiment.md` §2 before quoting any number
+   it produces.
 8. **Decide from the probe**, not from a plan written before it.
 
 3b is **optional even if 3a calibrates** (§4). A cheap calibrated ensemble from a 1 M-parameter

@@ -2,7 +2,7 @@
 #
 # Warm-start from the best 2c checkpoint. Because the FiLM projection is zero-initialized the
 # model begins numerically IDENTICAL to that checkpoint and the noise pathway grows from there.
-# Set train.warm_start to the 2c checkpoint path before running.
+# train.warm_start points at that checkpoint below; it is already wired.
 #
 # Anti-collapse instrumentation runs from step zero -- spread, zero-noise ablation, and FiLM
 # gradient norm are the gate, not afterthoughts. If spread < 0.05 x RMSE at epoch 3 the loop
@@ -78,6 +78,7 @@ train:
                                  # this did not. If the probe misbehaves, suspect this first.
   weight_decay: 0.1              # MIRRORS 2c -- see warm-start note above
   ckpt_every_steps: 2000         # MIRRORS 2c
-  warm_start: null               # <- set to the phase 2c checkpoint (arm A, the plain local
-                                 #    model: best at every lead, cheapest, and the most
-                                 #    seed-stable at +/-0.8% against the dilated arm's +/-8.3%)
+  # Phase 2c, arm A -- the plain local model: best at every lead, cheapest, and the most
+  # seed-stable at +/-0.8% against the dilated arm's +/-8.3%. Relative path, and it is the SAME
+  # path on the cloud instance as it is locally, so this config runs unedited in both places.
+  warm_start: runs/phase2c_full_20260819_192049/best_phase2c_full_20260819_192050.pt

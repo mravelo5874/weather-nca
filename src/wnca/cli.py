@@ -123,7 +123,8 @@ def cmd_eval(args) -> int:
 
         print("\n--- band energies, individual members ---")
         print(sp_summary(member_spectra(model, cfg, cache, bands, split=args.split,
-                                        lead_windows=12, device=device), channel=args.channel))
+                                        lead_windows=12, device=device, mesh=mesh),
+                         channel=args.channel))
     return 0
 
 

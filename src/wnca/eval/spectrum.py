@@ -34,6 +34,7 @@ def member_spectra(
     n_starts: int = 8,
     n_members: int | None = None,
     device: str = "cpu",
+    mesh=None,
 ) -> dict:
     """Per-band energy of individual members relative to ERA5, at one lead time.
 
@@ -44,6 +45,17 @@ def member_spectra(
     series = cache.split(split).array
     M = n_members if n_members is not None else (cfg.ensemble.m_test if cfg.model.stochastic else 1)
     st = torch.from_numpy(cache.static).float().to(device).unsqueeze(0)
+
+    # This stage is reached only when cfg.model.stochastic, so phase 3a is the first config to
+    # run it with solar forcing ON -- and without this the rollout raises. Found by smoking
+    # phase3a_probe; it would otherwise have crashed a paid run at eval time, after training.
+    solar = None
+    if cfg.state.solar_forcing:
+        if mesh is None:
+            raise ValueError("member_spectra needs `mesh` when state.solar_forcing is on")
+        from ..data.forcing import SolarForcing
+
+        solar = SolarForcing(cache.times(split), mesh, device)
 
     usable = len(series) - lead_windows - 2
     starts = np.unique(np.linspace(1, max(usable, 1), min(n_starts, max(usable, 1))).astype(int))
@@ -56,7 +68,9 @@ def member_spectra(
             np.array(series[s0 + lead_windows], dtype=np.float32)
         ).unsqueeze(0).to(device)
 
-        pred = model.rollout_ensemble(model.seed(cur), st, lead_windows, prev_phys=prev, n_members=M)
+        fw = solar.window(torch.tensor([int(s0)], device=device), lead_windows) if solar else None
+        pred = model.rollout_ensemble(model.seed(cur), st, lead_windows, prev_phys=prev,
+                                      n_members=M, forcing=fw)
         last = pred[:, :, -1]  # [1, M, N, C]
 
         members = last.reshape(M, *last.shape[2:])

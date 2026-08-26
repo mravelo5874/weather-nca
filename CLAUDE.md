@@ -71,7 +71,11 @@ Run `make smoke` before any phase goes to cloud.
 
 Re-measure these on the actual cloud instance before budgeting; do not treat them as portable.
 
-- **Memory is not the constraint.** Peak stays under 4 GB in every M2 configuration tried.
+- **Memory is not the constraint — in the *deterministic* phases.** Peak stays under 4 GB in
+  every M2 configuration tried. **This does not carry into milestone 3.** Phase 3a trains a
+  4-member ensemble and activation memory scales with `B x M`: at the stock `batch_size: 8` it
+  OOMs the local 6 GB card outright, and gradient checkpointing is already on, so the cheap
+  lever is spent. Measure memory again for any phase with `m_train > 1`.
 - **Time is.** ~80% of a sub-step is the update MLP and it scales with `hidden_dim²`; mesh
   perception is ~20%. Cost is linear in `B × M`, so there is no batching efficiency to recover.
   The 2c capacity sweep is therefore a compute-budget decision as much as an accuracy one.

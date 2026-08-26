@@ -454,7 +454,12 @@ SMOKE_OVERRIDES: dict[str, Any] = {
     "model": {"hidden_dim": 64, "n_layers": 2, "n_substeps": 4},
     "state": {"c_hidden": 8},
     "data": {"max_steps_per_split": 120, "train_years": [2015], "val_years": [2016], "test_years": [2017]},
-    "train": {"epochs": 1, "batch_size": 2, "ckpt_windows": 2, "warmup_steps": 5},
+    # warm_start is cleared deliberately. Smoke runs a 64-dim, n_sub=3 model; no full-size
+    # checkpoint can be loaded into it, so a phase config that warm-starts (3a, 3b) would fail
+    # the smoke path for a reason that has nothing to do with the config being wrong. Real
+    # warm-start compatibility is checked at full scale in tests/test_checkpoint.py.
+    "train": {"epochs": 1, "batch_size": 2, "ckpt_windows": 2, "warmup_steps": 5,
+              "warm_start": None},
     "ensemble": {"m_train": 2, "m_val": 2, "m_test": 2},
     "eval": {"max_windows": 4, "n_starts": 2, "lead_hours": [6, 12, 24]},
     "tracking": {"wandb": False},

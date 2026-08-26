@@ -347,3 +347,35 @@ def test_smoke_never_warm_starts():
 
     assert load_config("configs/phase3a_probe.yaml", smoke=True).train.warm_start is None
     assert load_config("configs/phase3a_crps.yaml", smoke=True).train.warm_start is None
+
+
+def test_phase3a_mirrors_2c_selection_knobs():
+    """The fourth inherited-default bug in this config, caught at launch and costed.
+
+    base gives ckpt_windows 8 and ckpt_subsample 1.0; 2c set 12 and 0.25. 3a set neither, so
+    selection ran on 100% of val at 8 windows. Measured on an L4: with m_val=16 that made the
+    selection pass 236.8 min of a 319 min epoch -- 85 h and ~$76 for the 2-year probe, more
+    than the entire remaining budget, with training only 16% of the cost.
+    """
+    from wnca.config import load_config
+
+    nca = load_config("configs/phase2c_full.yaml")
+    for name in ("phase3a_crps", "phase3a_probe"):
+        c = load_config(f"configs/{name}.yaml")
+        assert c.train.ckpt_windows == nca.train.ckpt_windows, name
+        assert c.train.ckpt_subsample == nca.train.ckpt_subsample, name
+
+
+def test_phase3a_selection_ensemble_stays_cheap():
+    """m_val drives selection cost linearly and buys nothing the criteria are judged on.
+
+    Every success criterion is evaluated at m_test=50 on the test split; m_val sets checkpoint
+    selection and the val curve only. Phase 2c selected with a deterministic metric, so 4 is
+    already more ensemble than the run 3a warm-starts from had. If this creeps back up, the
+    probe stops fitting the budget.
+    """
+    from wnca.config import load_config
+
+    c = load_config("configs/phase3a_probe.yaml")
+    assert c.ensemble.m_val <= 4, "selection cost is linear in m_val; see the config note"
+    assert c.ensemble.m_test == 50, "the criteria are judged at m_test=50"

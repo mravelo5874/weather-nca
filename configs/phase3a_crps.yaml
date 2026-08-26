@@ -43,8 +43,20 @@ loss:
 
 ensemble:
   m_train: 4                     # fair CRPS is unbiased at M=4 but high-variance. Do NOT tune
-  m_val: 16                      # anything on train-side spread; the eval-side estimate at
+  m_val: 4                       # anything on train-side spread; the eval-side estimate at
   m_test: 50                     # M=50 is the one to trust.
+  #
+  # m_val was 16 and is now 4, on a MEASUREMENT (2026-08-26, L4): at 16 the selection pass cost
+  # 236.8 min of a 319 min epoch -- 74% of the run -- putting the 2-year probe at 85 h / ~$76,
+  # more than the whole remaining budget. Training was 16% of the epoch.
+  #
+  # m_val buys nothing the experiment is judged on. It sets checkpoint selection and the val
+  # curve only; every criterion in docs/phase3a-experiment.md §3 is evaluated at m_test=50 on
+  # the test split. Phase 2c -- the checkpoint this fine-tunes -- selected with a DETERMINISTIC
+  # metric, so m_val=4 is strictly more ensemble than the run it inherits from had.
+  #
+  # The savings go to optimizer steps, not to selection precision: the FiLM projection is
+  # zero-initialised and step count is what decides whether spread grows (§5).
 
 train:
   # Both of the following were DECIDED on 2026-08-26, not inherited.
@@ -78,6 +90,16 @@ train:
                                  # this did not. If the probe misbehaves, suspect this first.
   weight_decay: 0.1              # MIRRORS 2c -- see warm-start note above
   ckpt_every_steps: 2000         # MIRRORS 2c
+  # Both of these MIRROR 2c and were previously inherited from base -- the same class of bug as
+  # spectral_norm and weight_decay above, and the fourth time this config's unexamined defaults
+  # would have cost a paid run. base gives ckpt_windows 8 and ckpt_subsample 1.0, so selection
+  # ran on 100% of val instead of 25%, at 8 windows instead of 12. Caught at launch, from the
+  # startup line reading "selection = 48h rollout (363 batches)" where 2c's reads 72h on 25%.
+  #
+  # 12 windows also aligns selection with what the criteria actually test: spread-skill at 24 h
+  # AND 72 h. Selecting on a 48 h rollout would optimise for a lead the criteria do not name.
+  ckpt_windows: 12
+  ckpt_subsample: 0.25
   # Phase 2c, arm A -- the plain local model: best at every lead, cheapest, and the most
   # seed-stable at +/-0.8% against the dilated arm's +/-8.3%. Relative path, and it is the SAME
   # path on the cloud instance as it is locally, so this config runs unedited in both places.

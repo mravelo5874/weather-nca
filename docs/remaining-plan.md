@@ -82,7 +82,9 @@ as a broken model.
 
 Warm-start from the phase-2c checkpoint, fine-tune on a **2-year** split, 16 epochs at
 `m_train = 4` with pushforward on. Answers the calibration question at ~1/17 the price of the
-full-data run: **~7-9 h and ~$6-8 for the single seed now planned** (amended from two, §3a.3).
+full-data run. **Measured on the L4 at launch: 21.8 h, ~$19** for the single seed now planned
+(amended from two, §3a.3) — see `phase3a-experiment.md` §6 for the per-stage breakdown and why
+two earlier estimates of this run were wrong.
 
 Design, success criteria and the failure-reading rules are pre-registered in
 `docs/phase3a-experiment.md`.

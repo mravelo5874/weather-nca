@@ -205,9 +205,28 @@ full-data epoch (~7,100 batches). Do not read a smoke failure there as a broken 
 
 | | |
 |---|---|
-| probe, one seed (as amended) | ~7–9 h, **~$6–8** |
-| second seed, if warranted | +~$8 |
-| remaining budget | ~$50 |
+| probe, one seed | **~21.8 h, ~$19** — measured, not estimated |
+| second seed, if warranted | +~$19 |
+| remaining budget at launch | ~$47 |
+
+**Measured on the L4, 2026-08-26, launch day.** Two prior estimates of this run were wrong — by
+2.3× and then by more — so the numbers here come from `wnca benchmark` plus a direct timing of
+the selection and val passes:
+
+| stage | per epoch | share |
+|---|---|---|
+| training, 365 steps @ 8.647 s | 52.6 min | 64% |
+| selection, 91 batches, 12 windows, `m_val 4` | 21.8 min | 27% |
+| val pass, 183 batches, `m_val 4` | 7.4 min | 9% |
+| **total** | **81.8 min** | 16 epochs = **21.8 h** |
+
+Peak GPU memory 10.96 GB at `B=8 × M=4` — fits the L4's 23 GB, and confirms the local 6 GB card
+was never an option.
+
+**The step cost is 10.3× the `m=1` benchmark, not 4×.** `B×M = 32` reached via members costs
+8.65 s where the same product reached via batch size costs 3.6 s. CLAUDE.md's "cost is linear in
+`B × M`" holds for `B` and **not** for `M` — the table behind that claim only ever varied `B`.
+Budget any future ensemble phase off a measurement, not off that rule.
 
 **If it calibrates:** scale to 5 or 10 years (~$18 / ~$37) with whatever is left. Full 39 years
 was never the point — 3a tests the *noise mechanism*, and 2a already established the data-scaling

@@ -82,7 +82,7 @@ as a broken model.
 
 Warm-start from the phase-2c checkpoint, fine-tune on a **2-year** split, 16 epochs at
 `m_train = 4` with pushforward on. Answers the calibration question at ~1/17 the price of the
-full-data run: **~9.5 h and ~$8 per seed, ~$17 for the required pair.**
+full-data run: **~7-9 h and ~$6-8 for the single seed now planned** (amended from two, §3a.3).
 
 Design, success criteria and the failure-reading rules are pre-registered in
 `docs/phase3a-experiment.md`.
@@ -94,7 +94,8 @@ Design, success criteria and the failure-reading rules are pre-registered in
 - **Report the ratio with a confidence interval, not as a point estimate.** A spread–skill ratio
   computed over `n_starts` initialisations from one seed is one correlated observation family —
   the same trap as "nine leads are not nine observations" in `phase2d-results.md` §3. Use a
-  **day-block bootstrap** over start times, and keep the two-seed rule.
+  **day-block bootstrap** over start times. Note the bootstrap covers *within-run* sampling
+  noise only; with the two-seed rule dropped (§3a.3) *between-run* variance is unmeasured.
 - **Do not tune on train-side spread.** Fair CRPS at `m_train = 4` is unbiased but
   high-variance; the eval-side estimate at `m_test = 50` is the one to trust.
 - Track **val RMSE alongside spread**. If RMSE degrades on the 2-year subset, the probe is
@@ -137,10 +138,19 @@ fixing the conditioning. The "budget" branch justifies more steps and nothing el
 
 ### 3a.3 — seeds
 
-**Two seeds, non-negotiable, after 2d.** At 2-year scale that is $14 total. Phase 2d's whole
-lesson is that a single seed produced a confident, wrong, internally-consistent result — and the
-arm that was noisiest was the one carrying the treatment. A spread–skill ratio at n = 1 is worth
-very little.
+**Amended 2026-08-26 to ONE seed**, by the project owner, on budget grounds — before any run,
+and recorded rather than applied silently.
+
+The original rule and its reasoning stand as written: 2d's single seed produced a confident,
+wrong, internally-consistent result, and seed spread there was **arm-specific** (±0.2%, ±0.8%,
+±8.3% across three arms), so one run cannot establish which kind of arm 3a is.
+
+What follows from n = 1 is a **reporting** constraint, not a redesign: the probe becomes a
+screening instrument. Its two weaknesses — the contaminated split and the single seed — both
+bias toward *passing*, so a failure is robust and a pass may not be promoted to "the FiLM design
+calibrates". The full rule, including which §5 verdicts survive at n = 1, is in
+`phase3a-experiment.md` §3. Seed 1 is the highest-value follow-up if the probe yields anything
+quotable — ahead of scaling seed 0 up.
 
 ### 3a.4 — the config audit, done
 
@@ -272,7 +282,9 @@ Two things to carry forward:
 
 **Then spend:**
 
-7. **The two-year probe, two seeds (~$17).** Ready to launch: `configs/phase3a_probe.yaml`,
+7. **The two-year probe, ONE seed (~$6–8).** Amended from two on 2026-08-26 on budget grounds;
+   see `phase3a-experiment.md` §3 for what n = 1 costs and the reporting rule it forces.
+   Ready to launch: `configs/phase3a_probe.yaml`,
    warm-start wired to the 2c checkpoint (now pulled local, `arch_hash 5ef20621bbf047bb` matching
    the config), split resolving onto the cache that already exists, smoked end to end. Seed 1 is
    `--set train.seed=1`. **Cloud only** — 3a OOMs the local 6 GB card at stock batch size.

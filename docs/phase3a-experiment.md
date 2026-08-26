@@ -120,9 +120,34 @@ start times of one seed is *one correlated observation family* — the same trap
 are not nine observations" (`phase2d-results.md` §3). Use a **day-block bootstrap** over start
 times, and report the CI alongside the ratio.
 
-**Two seeds, non-negotiable.** $17 for the pair at probe scale. 2d's entire lesson is that one
-seed produced a confident, internally consistent, *wrong* result, and that the noisiest arm was
-the one carrying the treatment.
+**AMENDED 2026-08-26, before any run: one seed, not two.** Decided by the project owner on
+budget grounds. Recorded here as a change to the pre-registration rather than applied silently,
+because the previous line read "two seeds, non-negotiable" and a plan that quietly relaxes after
+the fact is worth nothing.
+
+What it costs. 2d measured seed spread as **arm-specific, not a project constant** — ±0.2%,
+±0.8% and ±8.3% across three arms of the same codebase at the same budget — so a single run
+cannot say which kind of arm 3a is. And 3a is a new arm whose measured quantity, spread, grows
+from a zero-initialised projection over 5,840 steps; a growth process from zero is not obviously
+stable across initialisations. The day-block bootstrap does **not** cover this: it resamples
+start times *within* one run, and seed variance is *between* runs.
+
+**The reporting rule this forces:**
+
+| outcome | what may be claimed |
+|---|---|
+| **pass** (ratio in 0.8–1.25) | *"one seed, on a contaminated split, calibrated."* **Not** "the FiLM design calibrates." Unreplicated. |
+| **fail, §5 design signature** | Reasonably strong. §5 reads the spread *trajectory* and the FiLM *gradient norm* — mechanism-level evidence that does not rest on one endpoint number. |
+| **fail, §5 budget signature** | Weakest case: ambiguous between a bad draw and too few steps. Say so. |
+
+**Both weaknesses of this probe — the contaminated split (§2) and n = 1 — bias toward passing.**
+That makes it a decent *screening* instrument and a poor *confirmatory* one: a failure here is
+robust to both, a pass is doubly weak. Which is an acceptable trade for a go/no-go probe,
+provided the pass is never promoted into a result.
+
+**Seed 1 (`--set train.seed=1`, ~$8) is the highest-value follow-up if the probe produces
+anything worth quoting** — ahead of scaling seed 0 up. An unreplicated number at 5 years is
+worth less than a replicated one at 2.
 
 **Do not tune on train-side spread.** Fair CRPS at `m_train = 4` is unbiased but high-variance.
 The `m_test = 50` estimate is the one to trust.
@@ -180,8 +205,8 @@ full-data epoch (~7,100 batches). Do not read a smoke failure there as a broken 
 
 | | |
 |---|---|
-| probe, per seed | ~9.5 h, **~$8** |
-| probe, two seeds | **~$17** |
+| probe, one seed (as amended) | ~7–9 h, **~$6–8** |
+| second seed, if warranted | +~$8 |
 | remaining budget | ~$50 |
 
 **If it calibrates:** scale to 5 or 10 years (~$18 / ~$37) with whatever is left. Full 39 years
@@ -199,8 +224,11 @@ winning — which is precisely the mistake 2d's first design made.
 
 ## 7. Checklist before this is written up as a result
 
-- [ ] Both seeds complete
-- [ ] Spread–skill at 24 h and 72 h reported **with day-block bootstrap CIs**, both seeds
+- [ ] Seed 0 complete
+- [ ] Spread–skill at 24 h and 72 h reported **with day-block bootstrap CIs**
+- [ ] **n = 1 stated wherever the ratio is quoted**, with the §3 reporting rule applied — a pass
+      is not "the design calibrates"
+- [ ] Contamination caveat (§2) carried alongside, since it biases the same direction
 - [ ] Zero-noise ablation reported
 - [ ] §5 discriminator applied and the verdict recorded, **whichever way it goes**
 - [ ] Val RMSE tracked alongside spread — if it degraded on the 2-year split, only the

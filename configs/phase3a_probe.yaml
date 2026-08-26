@@ -5,8 +5,14 @@
 # warm-start checkpoint -- lives in the parent and is inherited, so the two configs cannot drift
 # apart. Scaling up after a pass means running the parent, not editing this file.
 #
-# Cost: ~9.5 h and ~$8 per seed on an L4; ~$17 for the two seeds the pre-registration requires
-# (docs/phase3a-experiment.md section 3). Against ~$50 remaining.
+# Cost: ~7-9 h and ~$6-8 on an L4, against ~$50 remaining.
+#
+# ONE seed. The pre-registration originally required two and was amended on 2026-08-26, before
+# any run -- see docs/phase3a-experiment.md section 3. That section is not optional reading
+# before quoting a number from this config: at n=1 the between-run variance is unmeasured (the
+# day-block bootstrap covers within-run sampling noise only), and 2d measured seed spread as
+# ARM-SPECIFIC, +/-0.2% to +/-8.3% across three arms of this same codebase. Seed 1 is
+# `--set train.seed=1` and is the highest-value follow-up if this produces anything quotable.
 #
 # ---------------------------------------------------------------------------------------
 # WHY THESE YEARS, AND THE CAVEAT THAT COMES WITH THEM

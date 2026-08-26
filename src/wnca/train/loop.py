@@ -547,8 +547,10 @@ def fit(cfg: Config, model: nn.Module, mesh, cache, device: str, out_dir: Path,
         if not np.isfinite(tr["loss"]):
             raise RuntimeError("training loss is not finite -- stopping")
 
-        # Phase 3a gate, checked rather than merely documented.
-        if probe and ep + 1 == 3 and probe["spread_over_rmse"] < 0.05:
+        # Phase 3a gate, checked rather than merely documented. Epoch-keyed, and the epoch is
+        # configurable because "epoch 3" is a proxy for a step count -- see TrainConfig.
+        gate_ep = cfg.train.spread_gate_epoch
+        if probe and gate_ep and ep + 1 == gate_ep and probe["spread_over_rmse"] < 0.05:
             print("\n  GATE FAILED: spread < 0.05 x RMSE at epoch 3. The noise is not reaching "
                   "the dynamics.\n  Fix the conditioning rather than training through it "
                   "(docs/milestone-2-plan.md, anti-collapse instrumentation).")

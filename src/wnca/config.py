@@ -226,6 +226,15 @@ class TrainConfig:
     # epoch comparison meaningless, which is M1 incident 2 in a new costume.
     ckpt_subsample: float = 1.0
     ckpt_every_steps: int = 0  # 0 = epoch boundaries only
+    # Epoch at which the phase-3a spread gate is checked; 0 disables it. The threshold is
+    # calibrated for a FULL-DATA epoch (~7,100 batches), so "epoch 3" means ~21,300 optimizer
+    # steps. On a short split it means something entirely different -- the 2-year probe reaches
+    # only 1,095 steps by epoch 3 -- and the project's own evidence is that step count alone
+    # decides whether spread has grown (0.029 at 177 steps and tripping, 0.503 by epoch 3 on a
+    # larger run). A gate that fires on a run that simply has not had time to grow spread is a
+    # false stop that costs the whole run, so short splits set this to 0 and read the printed
+    # spread trajectory instead (docs/phase3a-experiment.md section 5).
+    spread_gate_epoch: int = 3
     warm_start: str | None = None  # checkpoint path to initialize from
     seed: int = 0
 

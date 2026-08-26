@@ -469,3 +469,18 @@ def test_rolling_checkpoint_written_mid_epoch(tiny_cfg, small_mesh, tiny_cache, 
     latest = latest_checkpoint(tmp_path)
     assert latest is not None and latest.name.startswith("best_"), (
         f"--resume auto would pick up {latest.name}, not a selection checkpoint")
+
+
+def test_spread_gate_is_configurable_and_off_for_the_probe():
+    """"Epoch 3" is a proxy for a STEP count, and the proxy breaks on a short split.
+
+    The gate's 0.05 threshold is calibrated for a full-data epoch (~7,100 batches), so epoch 3
+    means ~21,300 optimizer steps. The 2-year probe reaches 1,095 by then -- 19x fewer -- and
+    spread grows from a zero-initialised projection, so the gate would likely have stopped the
+    run for having a short epoch rather than a broken model. Default behaviour is unchanged.
+    """
+    from wnca.config import load_config
+
+    assert load_config("configs/phase2c_full.yaml").train.spread_gate_epoch == 3
+    assert load_config("configs/phase3a_crps.yaml").train.spread_gate_epoch == 3
+    assert load_config("configs/phase3a_probe.yaml").train.spread_gate_epoch == 0

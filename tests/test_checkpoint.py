@@ -296,8 +296,13 @@ def test_phase3a_probe_resolves_onto_the_cache_that_already_exists():
         "probe no longer points at the cached 2-year split; it would need a fresh download")
 
 
-def test_phase3a_probe_changes_only_the_split():
-    """The probe must differ from its parent in the DATA and nothing else.
+def test_phase3a_probe_changes_only_the_split_and_the_spread_gate():
+    """The probe must differ from its parent in the DATA and the spread gate, nothing else.
+
+    The gate is the one deliberate non-data deviation: its threshold is calibrated for a
+    full-data epoch and is inapplicable at probe scale (see the config, and
+    test_spread_gate_is_configurable_and_off_for_the_probe). Every TRAINING decision must still
+    be inherited.
 
     It exists to be a cheap go/no-go for `phase3a_crps.yaml`, which is worthless if the two
     drift apart: a probe that passes on different training decisions than the run it is
@@ -315,6 +320,7 @@ def test_phase3a_probe_changes_only_the_split():
     for field in ("m_train", "m_val", "m_test"):
         assert getattr(probe.ensemble, field) == getattr(parent.ensemble, field), field
     assert probe.data.train_years != parent.data.train_years
+    assert probe.train.spread_gate_epoch == 0 and parent.train.spread_gate_epoch == 3
 
 
 def test_phase3a_warm_start_points_at_a_real_checkpoint():

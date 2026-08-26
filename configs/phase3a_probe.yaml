@@ -51,3 +51,21 @@ data:
   train_years: [2015, 2016]      # 2,924 steps -> 365 batches/epoch at batch_size 8
   val_years: [2017]              # 5,840 optimizer steps over 16 epochs
   test_years: [2018]             # see the caveat above before quoting anything measured here
+
+train:
+  # The epoch-3 spread gate is OFF here, and this is the one place the probe deviates from the
+  # parent in something other than data. It is not a softening of the criterion -- it is the
+  # gate being inapplicable at this scale.
+  #
+  # The gate stops training if spread < 0.05 x RMSE at epoch 3, and its threshold is calibrated
+  # for a FULL-DATA epoch of ~7,100 batches, i.e. ~21,300 optimizer steps by epoch 3. This probe
+  # reaches 1,095 steps by epoch 3 -- 19x fewer. The FiLM projection is zero-initialised, so
+  # spread has to GROW from nothing, and the project's own evidence is that step count alone
+  # decides whether it has: 0.029 at 177 steps (tripped the gate), 0.503 by epoch 3 on a larger
+  # run. Left on, this gate would probably have killed the probe at epoch 3 for having a short
+  # epoch rather than a broken model, burning the run to learn nothing.
+  #
+  # Nothing is lost by disabling it: spread, spread-skill and the zero-noise gap print EVERY
+  # epoch, and section 5 of docs/phase3a-experiment.md is the pre-registered rule for reading
+  # them. A real collapse is visible in that trace immediately.
+  spread_gate_epoch: 0

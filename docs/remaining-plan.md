@@ -256,15 +256,19 @@ Two things to carry forward:
 4. **Start the write-up skeleton** from §5. The methodological findings are the most citable
    part of the project and cost only time.
 
-**Near-free — evaluation only; one instance-hour covers both:**
+**Near-free — evaluation only; one instance-hour covers both. DONE 2026-08-26, ~$1, results in
+`docs/phase2c-closeout.md`:**
 
-5. **Forcing-zeroed ablation on the 2c checkpoint.** Settles the live 2b′ claim that solar
-   forcing is "worth 19% on 2t", which currently rests on an undertrained model
-   (`phase2d-results.md` §10). Best value per dollar left in the project.
-6. **Deterministic spectral band energies, 2c rollout vs ERA5 at 72 h.** Exit criterion 4 is
-   about *members*, but if the deterministic model is already over-smoothed that predicts 3b
-   will matter and says what a CRPS fine-tune has to fix; if it is sharp, 3b's expected value
-   drops. Directly informs the 3a/3b allocation, costs nothing.
+5. ~~**Forcing-zeroed ablation on the 2c checkpoint.**~~ **Done.** The 2b′ claim reproduces at
+   **52.2% on 2t at 24 h** against the claimed 18.6% — understated by ~3×, not inflated — plus
+   ~6% on z500. Caveat retired. It also falsified the "conditioning too weak" branch of 2c's 2t
+   deficit, leaving mesh resolution as the explanation.
+6. ~~**Deterministic spectral band energies, 2c rollout vs ERA5 at 72 h.**~~ **Done.** Monotone
+   over-smoothing: band means 0.98 / 0.71 / 0.48 / 0.30 / 0.25, with 2t collapsed to **0.045**.
+   This does **not** raise 3b's price the way the script's printed verdict claims — an MSE model
+   converging to the smooth conditional mean is the objective behaving as designed, not an
+   architectural limit. What it buys is the baseline 3a's members must beat and a free
+   diagnostic: CRPS should move these ratios with no spectral term at all.
 
 **Then spend:**
 

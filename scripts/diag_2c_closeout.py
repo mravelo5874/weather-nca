@@ -175,9 +175,12 @@ def stage_spectrum(cfg, mesh, cache, model, device, split, lead, n_starts):
           f"{finer_half:.2f}")
     print()
     if worst < 0.5:
-        print(f"  {FAIL} HEAVILY over-smoothed: band {worst_b} retains only {worst:.2f} of ERA5's")
-        print("     energy. 3b has real work to do and criterion 4 (members within 20% of ERA5)")
-        print("     is a long way off. This RAISES 3b's expected value.")
+        print(f"  {WARN} HEAVILY over-smoothed: band {worst_b} retains only {worst:.2f} of ERA5's")
+        print("     energy, and criterion 4 (members within 20% of ERA5) starts a long way off.")
+        print("     Do NOT read this as raising 3b's price: an MSE-trained model converges to the")
+        print("     smooth conditional mean, so this is the objective behaving as designed. What")
+        print("     it gives you is the baseline 3a's MEMBERS have to beat -- CRPS penalises")
+        print("     over-smooth members directly, so it should move these ratios with w_spec=0.")
     elif worst < 0.8:
         print(f"  {WARN} Over-smoothed at band {worst_b} ({worst:.2f}). 3b would help; whether it")
         print("     can reach criterion 4's 20% band is open.")

@@ -300,6 +300,14 @@ and **it has never been repeated on a healthy model**. Phase 2c has solar forcin
 same forcing-zeroed ablation can be run against its checkpoint. That is the experiment that
 settles it, and it is evaluation-only. Deferred while the instance trains the seed pair.
 
+**Settled 2026-08-26.** It was run, and the claim does not merely survive — it was understated.
+On the healthy 2c checkpoint the gain is **52.2% at 24 h** against 2b′'s 18.6%, with every lead
+beaten by 2.5–3.4×, and ~6% on z500 besides. The undertrained model **under-used** the forcing,
+which is the opposite of the direction this section expected the correction to run. Full numbers
+and the two caveats that come with them — the forcing channels are the model's only clock, and
+the result kills the "weak conditioning" branch of the 2t question — are in
+`phase2c-closeout.md` §1.
+
 A separate measurement, run while chasing this: comparing the 2b (no solar) and 2b′ (solar)
 *checkpoints* on 2 m temperature shows 2b′ **worse at every lead**, by 10% at 24 h rising to
 47% at 72 h. That is a different comparison from the ablation — two differently-trained models

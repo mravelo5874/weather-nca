@@ -237,6 +237,11 @@ winter mid-latitudes. And the ablation is unambiguous:
 The pathway is worth 19% on 2t at 24 h. It did not overcome the undertraining, but the
 mechanism works and should be kept.
 
+> **Superseded 2026-08-26.** Repeated on the healthy 2c checkpoint, the same ablation gives
+> **52.2% at 24 h** — the undertrained model *under-used* the forcing by roughly 3×, the opposite
+> of the expected direction. It is also worth ~6% on z500, so the pathway is not 2t-only. See
+> `phase2c-closeout.md` §1. Quote the 2c numbers, not these.
+
 ### 2b′.1 The CFL argument for 40 sub-steps was a clever measurement, and it misfired
 
 More sub-steps did **not** slow error growth — it rose (×1.062 → ×1.083), with the v-winds
@@ -509,8 +514,17 @@ over-damping and the amendment remains unadopted.
 **2 m temperature: −31% at 24 h, −57% at 72 h, −90% at 120 h.** Every other channel beats
 persistence at 24 h. Solar forcing is *on* in this run, so either the conditioning is too weak
 to drive a field that swings on a 24 h period, or a 223 km mesh cannot resolve the land-surface
-contrast that sets it. Unresolved — and it means the 2b′ claim that "solar forcing is worth 19%
-on 2t" still has no support from a healthy model.
+contrast that sets it.
+
+**Resolved 2026-08-26 — it is the mesh.** The forcing-zeroed ablation on this same checkpoint
+puts the conditioning at **52.2% on 2t at 24 h** (`phase2c-closeout.md` §1). Conditioning worth
+half the error is not "too weak to drive the field", so the first branch is dead: 2t is the worst
+channel *despite* the forcing pathway working hard. The spectral measurement agrees independently
+— 2t retains **4.5%** of ERA5's finest-band energy at 72 h, by far the worst of any channel, i.e.
+its variance lives at scales a 223 km mesh cannot carry.
+
+That ablation also retires the caveat this section used to carry: the 2b′ claim that "solar
+forcing is worth 19% on 2t" **now has support from a healthy model**, and is understated by ~3×.
 
 ### Not converged
 

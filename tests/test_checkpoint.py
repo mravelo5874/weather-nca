@@ -243,3 +243,36 @@ def test_history_survives_the_checkpoint(tiny_cfg, small_mesh, tmp_path):
                            metric=0.6, extra={"history": hist})
     blob = load_checkpoint(path, build_model(tiny_cfg, small_mesh), tiny_cfg)
     assert blob["extra"]["history"]["sel"] == [0.7, 0.6]
+
+def test_phase3a_can_warm_start_from_phase2c():
+    """3a fine-tunes a 2c checkpoint, so its architecture must match 2c's exactly.
+
+    It did not. `phase3a_crps.yaml` set only `stochastic` and `noise_dim`, inheriting
+    `spectral_norm: false` from base against 2c's true. A 2c checkpoint carries spectral-norm
+    buffers (weight_orig / weight_u / weight_v, 12 keys at n_layers=4), `warm_start` raises on
+    unexpected keys, and 3a therefore **could not start at all** -- a guaranteed crash on first
+    launch that nothing would have caught before an instance was paid for.
+
+    arch_hash is the right thing to assert: it is exactly the fingerprint `load_checkpoint`
+    checks, so if these two ever diverge again the warm start breaks and this fails first.
+    """
+    from wnca.config import load_config
+
+    nca = load_config("configs/phase2c_full.yaml")
+    crps = load_config("configs/phase3a_crps.yaml")
+    assert crps.arch_hash() == nca.arch_hash(), (
+        f"3a arch {crps.arch_hash()} != 2c arch {nca.arch_hash()} -- warm start will raise. "
+        f"spectral_norm 2c={nca.model.spectral_norm} 3a={crps.model.spectral_norm}")
+
+
+def test_phase3a_keeps_the_weight_decay_that_fixed_phase2c():
+    """The silent half of the same bug. `weight_decay` inherits 1e-5 from base, which phase 2c
+    measured as ~11,000x too weak to oppose the weight-norm ratchet that destroyed four runs.
+    Unlike the arch mismatch this would not crash -- it would quietly undo the stability fix
+    partway through a 15-epoch run."""
+    from wnca.config import load_config
+
+    nca = load_config("configs/phase2c_full.yaml")
+    crps = load_config("configs/phase3a_crps.yaml")
+    assert crps.train.weight_decay == nca.train.weight_decay, (
+        f"3a weight_decay {crps.train.weight_decay} != 2c's {nca.train.weight_decay}")

@@ -45,15 +45,43 @@ Each arm is the mean of two seeds; ± is the within-arm seed spread.
 
 **The pre-registered comparison (`d=8` vs `d=1`, identical in parameters and compute, differing
 only in reach) is +0.4% at 24 h** — the wrong sign, and twenty times smaller than the `d=8`
-arm's own 8.3% seed spread. There is no measurable reach effect.
+arm's own 8.3% seed spread.
+
+### The power bound, which has to travel with the null
+
+With n = 2 per arm, the standard error of each arm mean is |seed difference| / 2:
+
+| arm | mean | SE of mean |
+|---|---|---|
+| local | 174.0 | 0.40% |
+| `d=8` | 180.9 | **4.15%** |
+| `d=1` | 180.2 | 0.11% |
+
+The SE of the `d8 − d1` difference is **4.16%**, so the **minimum effect this experiment could
+detect at 2σ is 8.3%**.
+
+That is the honest form of the result, and it is weaker than "reach buys nothing": **a 4% reach
+effect — exactly the size originally claimed — sits below the detection threshold.** This
+experiment cannot distinguish "reach is worth 4%" from "reach is worth 0%". It rules out large
+effects, not small ones.
+
+The defensible claim is therefore **"locality is sufficient at this budget and resolution,
+against isotropic long-range reach, to within ~8%"** — not "non-locality does not help".
+
+With n = 2 the SD estimate carries one degree of freedom, so the bound itself is rough. The
+cheapest thing that would tighten it is **a third seed on `d=8` specifically** — the only noisy
+arm — not a third seed everywhere.
 
 **What does hold:** both dilated arms are worse than the plain local model — 4.0% and 3.6% at
-24 h, widening with lead. The fifth perception channel costs ~4% whatever radius it carries,
-and reach does not recover it.
+24 h, widening with lead. **A fifth, near-collinear perception channel costs ~4%** whatever
+radius it carries, and reach does not recover it. The wording matters: that cost is measured
+for a channel whose 1-hop form is a uniform-weight Laplacian sitting beside the existing
+cotangent one, and it should not be quoted as the cost of adding *any* channel (§3).
 
-> **Adding a long-range channel to a strictly local update rule does not improve forecasts.
-> At 160 hops per window — 1.7× the mesh diameter, effectively global — the model is no better
-> than at 20 hops, and both are worse than not adding the channel at all.**
+> **Adding a long-range channel to a strictly local update rule does not improve forecasts by
+> more than this experiment can resolve (~8%). At 160 hops per window — 1.7× the mesh diameter,
+> effectively global — the model is no better than at 20 hops, and both are worse than not
+> adding the channel at all.**
 
 Caveats that remain: one radius, isotropic, n = 2, one mesh, one training budget (§6). And the
 channel's ~4% cost is confounded with its near-collinearity to the existing Laplacian (§3).
@@ -96,16 +124,30 @@ The result is more interesting than either a clean confirmation or a refutation:
 
 The seed pair settled it (§2), and the answer is cleaner than the n = 1 reading suggested:
 
-- **Reach buys nothing measurable.** `d=8` (160 hops/window) against `d=1` (20 hops) is **+0.4%
-  at 24 h** on two-seed means — the wrong sign, and 20× smaller than `d=8`'s own 8.3% seed
-  spread.
+- **Reach buys nothing this experiment can resolve.** `d=8` (160 hops/window) against `d=1`
+  (20 hops) is **+0.4% at 24 h** on two-seed means — the wrong sign. But the minimum detectable
+  effect here is **8.3%** (§2), so this rules out a large reach effect and says nothing about a
+  small one.
 - **The channel that carries reach costs ~4%.** Both dilated arms sit above the plain local
   model at every lead from 12 h out.
 - **So locality is sufficient at this budget**, and the earlier "reach is not free skill" reading
   was one lucky seed.
 
-What this still does **not** license is "non-locality doesn't help" in general. It tested one
-radius, isotropically, at n = 2, on one mesh and one training budget (§6).
+What this still does **not** license is "non-locality doesn't help" in general — for three
+separate reasons, and the write-up should carry all of them:
+
+1. **Power.** The bound is ~8%; a 4% effect would be invisible here.
+2. **Form.** This tested *isotropic* long-range diffusion at one radius. A directional ring
+   gradient, or learned long-range weights, are untested.
+3. **No working non-local baseline.** The GNN control turned out to reach *less* far than the
+   local model (§6), so the only functioning non-local arm in this phase is the dilated stencil.
+   A reviewer asking "where is the message-passing baseline that actually passes information?"
+   has a fair question, and the answer is that it would need pooling/unpooling across icosphere
+   levels, which was not built.
+
+The claim that survives all three is narrow and worth stating exactly: **a strictly local update
+rule is sufficient at this resolution and budget, against isotropic long-range reach, to within
+~8%.**
 
 ---
 
@@ -124,12 +166,15 @@ doubles synoptic-scale errors in roughly 1.5–2.5 days.
 
 Two readings:
 
-- **Reach may make error grow faster — consistent with, not established.** D at 1.87 d against
-  the placebo's 2.25 d is an 18.5% difference. But A and B, *the same model at different seeds*,
-  differ by 12.6% on this exact quantity. So the D−E growth gap is only about 1.5× the observed
-  seed spread, which is not enough to call it. It would fit a "starts better, degrades quicker"
-  mechanism — the D−E RMSE gap does narrow from 3.9% at 24 h to 2.1% at 120 h — but the seed
-  pair has to land before that reading means anything.
+- **Do not compare doubling times between NCA arms at n = 2.** D at 1.87 d against the placebo's
+  2.25 d looks like an 18.5% difference, but A and B — *the same model at different seeds* —
+  differ by 12.6% on this exact quantity. The per-arm numbers are reported above because they
+  were measured, not because they support a ranking. An earlier version of this section read a
+  "starts better, degrades quicker" mechanism into them; that was the same over-reading that
+  produced the retracted result in §3, one metric over.
+
+  **The only comparison the data supports here is categorical:** all four local-rule arms sit in
+  or near the atmospheric band; the GNN does not.
 - **The GNN doubles error twice as fast as the atmosphere.** That is the signature of a model
   whose own states drift off-distribution, and it matches its collapse beyond 72 h.
 

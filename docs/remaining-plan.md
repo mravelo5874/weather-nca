@@ -16,7 +16,7 @@ phases had a measured price and before the budget was half spent.
 | 2b′ | solar forcing + 40 sub-steps | ❌ confounded, undertrained |
 | 2b-pf | pushforward training | ✅ fixed long-lead divergence |
 | **2c** | **39 years, 28 channels** | ✅ **the model: 24 h z500 = 174.0 ±0.8%** |
-| **2d** | **locality** | ✅ **null: reach buys nothing measurable** |
+| **2d** | **locality** | ✅ **null to within ~8% — see the power caveat below** |
 | 3a | ensembles, fair CRPS | ⬜ not started |
 | 3b | spectral loss, member sharpness | ⬜ not started |
 
@@ -32,6 +32,13 @@ phases had a measured price and before the budget was half spent.
 
 **Three of five hold. The two that don't are the entire probabilistic half of the milestone**,
 and they are both unmeasured rather than failing.
+
+**Criterion 1 needs a caveat when it is written up.** 2d's minimum detectable effect was
+**8.3%** (`phase2d-results.md` §2), so it rules out a large locality penalty and not a small
+one. And the GNN control reached *less* far than the local model, so the only functioning
+non-local arm was the dilated stencil. The claim that survives is "a strictly local rule is
+sufficient at this resolution and budget, against isotropic long-range reach, to within ~8%" —
+not "non-locality does not help".
 
 ---
 
@@ -77,13 +84,42 @@ Warm-start from the phase-2c checkpoint, fine-tune on a **2-year** split, full 1
 `m_train = 4`. Answers the calibration question at 1/20 the price.
 
 **Pre-register before running:**
-- Success = spread–skill in **0.8–1.25** at 24 h and 72 h, with a zero-noise ablation
+
+- **Success** = spread–skill in **0.8–1.25** at 24 h and 72 h, with a zero-noise ablation
   measurably different from the ensemble mean.
+- **Report the ratio with a confidence interval, not as a point estimate.** A spread–skill ratio
+  computed over `n_starts` initialisations from one seed is one correlated observation family —
+  the same trap as "nine leads are not nine observations" in `phase2d-results.md` §3. Use a
+  **day-block bootstrap** over start times, and keep the two-seed rule.
+- **Do not tune on train-side spread.** Fair CRPS at `m_train = 4` is unbiased but
+  high-variance; the eval-side estimate at `m_test = 50` is the one to trust.
 - Track **val RMSE alongside spread**. If RMSE degrades on the 2-year subset, the probe is
   confounded and only the *direction* of the spread result carries.
-- **Decide now** whether tuning `noise_std` / `noise_dim` in response is legitimate. Suggested
-  rule: **one** documented adjustment allowed; iterating until the number lands in the band is
-  fitting to the criterion, not measuring.
+- **One** documented adjustment to `noise_std` / `noise_dim` is allowed in response. Iterating
+  until the number lands in the band is fitting to the criterion, not measuring.
+
+### 3a.1b — the negative branch is confounded, and needs its own discriminator
+
+**Pre-register this too, because without it a failed probe will be over-read.**
+
+The FiLM projection is **zero-initialised**. So a 2-year, 15-epoch fine-tune at lr 1e-4 gives the
+entire noise pathway **~5,475 optimizer steps to grow from nothing**. A calibration failure at
+that budget has two completely different explanations, and they imply opposite responses:
+
+| reading | signature at epoch 15 | response |
+|---|---|---|
+| **budget** — not enough steps | spread/skill still climbing monotonically; FiLM gradient norm healthy and non-vanishing | scale the probe up; the design is fine |
+| **design** — the conditioning cannot drive the dynamics | spread/skill flat or collapsing; FiLM gradient norm vanishing | fix the conditioning; more compute will not help |
+
+The instrumentation already exists — spread, zero-noise gap and FiLM gradient norm are printed
+every epoch by the anti-collapse probe. This just writes the discriminator down **before** the
+result, so a $7 null cannot be reported as "a real finding about the FiLM design" when it may
+only be a statement about 5,475 steps.
+
+Local evidence that the budget branch is live: on a larger synthetic run spread reached
+0.078 × RMSE at epoch 1 and 0.503 by epoch 3, but on the default smoke (177 steps) it was still
+at 0.029 at epoch 3 and tripped the gate. **Step count, not design, decided which of those
+happened.**
 
 ### 3a.2 — scale up, conditional
 
@@ -91,8 +127,9 @@ If the probe calibrates: run **5 or 10 years at 15 epochs ($18 / $37)** dependin
 left. Full 39 years is out of reach and, given 3a tests the *noise mechanism* rather than data
 scaling, is not what the phase is for.
 
-If the probe does *not* calibrate: that is a real finding about the FiLM design and it cost $7.
-Fix the conditioning rather than training through it — the gate's own advice.
+If the probe does *not* calibrate: **apply the §3a.1b discriminator before calling it a design
+finding.** Only the "design" branch — spread flat and FiLM gradients vanishing — justifies
+fixing the conditioning. The "budget" branch justifies more steps and nothing else.
 
 ### 3a.3 — seeds
 
@@ -101,22 +138,36 @@ lesson is that a single seed produced a confident, wrong, internally-consistent 
 arm that was noisiest was the one carrying the treatment. A spread–skill ratio at n = 1 is worth
 very little.
 
-### 3a.4 — the config needs an audit first
+### 3a.4 — the config audit, done
 
-2d's config shipped with `epochs: 20` against 2c's 8, a control at 1.67× its own stated
-parameter budget, and an inherited `weight_decay` 10,000× off. 3a's config has the same
-provenance problem — values written down early and never tested:
+Run against §3a's concerns, and it found a **launch-blocking bug plus a silent one**:
 
-- `epochs: 15` against 2c's 8, for what is a *warm-start fine-tune* at lr 1e-4.
-- `lr: 1e-4`, "dropped an order of magnitude", from no recorded measurement. 2c's lr came from
-  an actual sweep.
-- The epoch-3 spread gate threshold of 0.05, provenance unknown.
-- `warm_start: null` — literally unset, with a comment saying to fill it in.
+| field | 2c | 3a as written | consequence |
+|---|---|---|---|
+| `model.spectral_norm` | true | **false** | `arch_hash` differs; `warm_start` raises on 12 unexpected keys — **3a could not start** |
+| `train.weight_decay` | 0.1 | **1e-5** | silently reverts the fix that saved phase 2c |
+| `train.ckpt_every_steps` | 2000 | 0 | a 15-epoch run with no rolling checkpoint |
 
-**Warm-start from the plain local model (phase 2c, arm A).** 2d settled this: A is the best arm
-at every lead, the cheapest, the most seed-stable (±0.8% vs the dilated arm's ±8.3%), and its
-error growth sits closest to the atmospheric band — which matters more in a probabilistic phase,
-where over-damping directly suppresses the spread 3a exists to measure.
+All three now mirror 2c explicitly, with the reason recorded in the config so nobody
+"simplifies" them back. `tests/test_checkpoint.py` asserts the arch hashes match and the weight
+decay agrees; verified by reverting the fix and watching the test fail.
+
+**Two left as decisions, not defaults** — flagged in the config rather than silently mirrored:
+
+- **`pushforward`.** 2c trained with it on; base defaults it off, so 3a currently drops it. That
+  changes what the fine-tune is asked to do — CRPS from clean analysis states rather than from
+  the model's own. Plausibly right for a probabilistic phase; it should be chosen.
+- **`epochs: 15`** against 2c's 8, with no measurement behind it, on a warm-start fine-tune.
+  Cost scales linearly with it.
+
+Still unaudited: **`lr: 1e-4`** has no recorded provenance. 2c's learning rate came from a
+fixed-LR sweep; this one was "dropped an order of magnitude". If the probe misbehaves, suspect
+it first.
+
+**Warm-start from the plain local model (phase 2c, arm A).** 2d settled this: best at every
+lead, cheapest, most seed-stable (±0.8% against the dilated arm's ±8.3%), and its error growth
+sits closest to the atmospheric band — which matters more in a probabilistic phase, where
+over-damping directly suppresses the spread 3a exists to measure.
 
 ---
 
@@ -184,15 +235,36 @@ Two things to carry forward:
 
 ---
 
-## 7. Immediate next actions
+## 7. Immediate next actions, in spend order
 
-1. **Audit `phase3a_crps.yaml`** against §3.4. Free.
-2. **Write `docs/phase3a-experiment.md`** before running — design, pre-registered success
-   criteria, the noise-tuning rule. The two-doc pattern caught the gated-placebo error in 2d and
-   costs nothing. Free.
-3. **Run the $7 two-year probe, two seeds ($14).**
-4. **Decide from the probe**, not from a plan written before it.
+**Free — do all of these before any instance starts:**
 
-Deferred and cheap, whenever an instance is up: the **forcing-zeroed ablation on the 2c
-checkpoint**, which settles the 2b′ solar-forcing claim on a healthy model (`phase2d-results.md`
-§10).
+1. ~~Audit `phase3a_crps.yaml`~~ — **done, and it found a launch-blocking bug.** 3a inherited
+   `spectral_norm: false` against 2c's `true`, so `arch_hash` differed and `warm_start` would
+   have raised on 12 unexpected keys: **3a could not have started at all.** The same inheritance
+   silently reverted `weight_decay` to the value 2c measured as ~11,000× too weak. Both fixed,
+   both now covered by tests in `tests/test_checkpoint.py`.
+2. **Write `docs/phase3a-experiment.md`** before running — design, the §3a.1 success criteria,
+   the §3a.1b budget-vs-design discriminator, the noise-tuning rule.
+3. **Decide `pushforward` and `epochs`.** Both are inherited rather than chosen, and both are
+   flagged in the config. 2c trained with pushforward ON; base defaults it OFF.
+4. **Start the write-up skeleton** from §5. The methodological findings are the most citable
+   part of the project and cost only time.
+
+**Near-free — evaluation only; one instance-hour covers both:**
+
+5. **Forcing-zeroed ablation on the 2c checkpoint.** Settles the live 2b′ claim that solar
+   forcing is "worth 19% on 2t", which currently rests on an undertrained model
+   (`phase2d-results.md` §10). Best value per dollar left in the project.
+6. **Deterministic spectral band energies, 2c rollout vs ERA5 at 72 h.** Exit criterion 4 is
+   about *members*, but if the deterministic model is already over-smoothed that predicts 3b
+   will matter and says what a CRPS fine-tune has to fix; if it is sharp, 3b's expected value
+   drops. Directly informs the 3a/3b allocation, costs nothing.
+
+**Then spend:**
+
+7. **The $7 two-year probe, two seeds ($14).**
+8. **Decide from the probe**, not from a plan written before it.
+
+3b is **optional even if 3a calibrates** (§4). A cheap calibrated ensemble from a 1 M-parameter
+local model is the differentiator worth having; member sharpness refines it.

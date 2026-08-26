@@ -1,5 +1,4 @@
 # Phase 3a -- probabilistic: FiLM noise + fair CRPS. Isolates: loss + noise.
-# GATE: spread-skill > 0.3 by epoch 3.
 #
 # Warm-start from the best 2c checkpoint. Because the FiLM projection is zero-initialized the
 # model begins numerically IDENTICAL to that checkpoint and the noise pathway grows from there.
@@ -8,11 +7,34 @@
 # Anti-collapse instrumentation runs from step zero -- spread, zero-noise ablation, and FiLM
 # gradient norm are the gate, not afterthoughts. If spread < 0.05 x RMSE at epoch 3 the loop
 # stops on its own: fix the conditioning rather than training through it.
+#
+# NOTE on that gate: it is calibrated for a full-data epoch (~7,100 batches). It FALSE-FIRES on
+# the smoke path, where epoch 3 is only ~177 optimizer steps and spread has had no chance to
+# grow. A smoke failure there is not a broken model. Measured on a larger synthetic run, spread
+# reaches 0.078 x RMSE at epoch 1 and 0.503 by epoch 3.
+#
+# ---------------------------------------------------------------------------------------
+# WARM-START COMPATIBILITY -- do not remove these three fields
+#
+# Everything below `train:` that mirrors phase 2c is here because 3a fine-tunes a 2c checkpoint,
+# and inheriting base.yaml's defaults instead was a real bug, not a hypothetical one:
+#
+#   spectral_norm       base default false vs 2c's true. 2c checkpoints carry spectral-norm
+#                       buffers (weight_orig / weight_u / weight_v), so the state dict has 12
+#                       keys a non-spectral-norm model does not expect. `warm_start` raises on
+#                       unexpected keys, so 3a as previously configured COULD NOT START. It
+#                       also changes arch_hash: 5ef20621bbf047bb vs 0f26ab65dc0b8bb3.
+#   weight_decay        base default 1e-5 -- the value phase 2c measured as ~11,000x too weak
+#                       to oppose the weight-norm ratchet that destroyed four runs. This one
+#                       would NOT have crashed; it would have quietly removed the fix.
+#   ckpt_every_steps    base default 0. A 15-epoch run with no rolling checkpoint can lose most
+#                       of a day to one interruption.
 phase: phase3a_crps
 
 model:
   stochastic: true
   noise_dim: 16
+  spectral_norm: true            # MUST match 2c -- see warm-start note above
 
 loss:
   w_field: 1.0
@@ -20,11 +42,28 @@ loss:
   crps_alpha: 1.0                # fully fair; drop toward 0.95 only for gradient stability
 
 ensemble:
-  m_train: 4
-  m_val: 16
-  m_test: 50
+  m_train: 4                     # fair CRPS is unbiased at M=4 but high-variance. Do NOT tune
+  m_val: 16                      # anything on train-side spread; the eval-side estimate at
+  m_test: 50                     # M=50 is the one to trust.
 
 train:
+  # DECISION REQUIRED before running -- both of these are inherited, not chosen:
+  #
+  #   epochs: 15   against 2c's 8, with no measurement behind it. This is a warm-start
+  #                fine-tune at lr 1e-4, not training from scratch. 15 was written down early
+  #                and never tested. Cost scales linearly with it (see docs/remaining-plan.md).
+  #
+  #   pushforward  2c trained with it ON; base defaults it OFF, so 3a currently drops it. That
+  #                changes what the fine-tune is being asked to do -- CRPS from clean analysis
+  #                states rather than from the model's own. It may be the right call for a
+  #                probabilistic phase, but it should be a decision. Left at the base default
+  #                deliberately, flagged rather than silently mirrored.
   epochs: 15
-  lr: 1.0e-4                     # dropped an order of magnitude from the deterministic phases
-  warm_start: null               # <- set to the phase 2c checkpoint
+  lr: 1.0e-4                     # dropped an order of magnitude from the deterministic phases.
+                                 # Provenance: none. 2c's lr came from an actual fixed-LR sweep;
+                                 # this did not. If the probe misbehaves, suspect this first.
+  weight_decay: 0.1              # MIRRORS 2c -- see warm-start note above
+  ckpt_every_steps: 2000         # MIRRORS 2c
+  warm_start: null               # <- set to the phase 2c checkpoint (arm A, the plain local
+                                 #    model: best at every lead, cheapest, and the most
+                                 #    seed-stable at +/-0.8% against the dilated arm's +/-8.3%)

@@ -241,10 +241,55 @@ winning — which is precisely the mistake 2d's first design made.
 
 ---
 
+## 6b. RESULT — criterion 3 fails, decisively
+
+Measured 2026-08-31 on the test split at `m_test = 50`, 64 start times, day-block bootstrap over
+16 day-blocks (`scripts/measure_spread_skill.py`, `spread_skill_3a.json`):
+
+| lead | spread–skill | 95% CI | band | verdict |
+|---|---|---|---|---|
+| 24 h | **2.120** | [2.088, 2.147] | 0.8–1.25 | over-dispersed, 1.70× the upper bound |
+| 72 h | **2.567** | [2.510, 2.615] | 0.8–1.25 | over-dispersed, 2.05× the upper bound |
+
+The intervals are ±1.5% wide. This is a property of the model, not estimator noise.
+
+**This is the §4 over-dispersion branch, named in advance:** *"noise is being injected faster
+than the dynamics organise it, which would point at `noise_std` rather than at the FiLM design."*
+The conditioning demonstrably works — the zero-noise gap stayed at 0.17–0.27 for all 16 epochs
+and spread never came near collapse. What is wrong is its magnitude, and it worsens with lead.
+
+### `wnca eval` never computed this
+
+The eval command reports RMSE, CRPS, perturbation growth and band energies; the string "spread"
+appears **zero times** in its output. Every spread number this project produced before today came
+from the training probe, which reads `next(iter(loader))` — **one batch of four start times** on
+val. That, not the `m_val` reduction, is why the epoch trace swung 1.04–1.99 while the loss curves
+ran smooth through it. `scripts/measure_spread_skill.py` exists because of this gap; it pools
+variance and squared error across starts and takes the root last, per the CLAUDE.md convention.
+
+### Correction to §2's caveat framing
+
+§2 says the probe's two weaknesses "bias toward passing". **That is only true on the
+under-dispersed side, and it was written before the direction was known.** Contamination lowers
+the error term, and spread–skill is spread ÷ error, so it pushes the ratio *up* — for an
+over-dispersed model that makes the reading worse, not better. The clean-split value is somewhat
+below 2.120. Selection leakage moves error by a few percent; it would have to be ~10× larger to
+reach 1.25. **The failure stands and the caveat works against the model, not for it.**
+
+### The one permitted adjustment
+
+§3 allows exactly one documented change to `noise_std` / `noise_dim`. Before spending ~$19 on a
+retrain, the cheap test is **inference-time noise scaling**: re-measure spread–skill with `z`
+scaled by 1/2.12, which costs one eval pass (~$2) and no training. If a single scalar brings both
+leads into band, the diagnosis is confirmed as magnitude-only and the retrain is justified; if it
+does not, the fault is in how spread grows with lead, not in its size, and a retrain at a smaller
+`noise_std` would not fix it either. Report any such factor as a **calibration factor, not a
+pass** — tuning until the number lands in the band is fitting to the criterion.
+
 ## 7. Checklist before this is written up as a result
 
-- [ ] Seed 0 complete
-- [ ] Spread–skill at 24 h and 72 h reported **with day-block bootstrap CIs**
+- [x] Seed 0 complete — 16 epochs, best selection 0.20636 at epoch 15
+- [x] Spread–skill at 24 h and 72 h reported **with day-block bootstrap CIs** — §6b, fails
 - [ ] **n = 1 stated wherever the ratio is quoted**, with the §3 reporting rule applied — a pass
       is not "the design calibrates"
 - [ ] Contamination caveat (§2) carried alongside, since it biases the same direction

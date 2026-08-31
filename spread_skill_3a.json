@@ -1,0 +1,21 @@
+{
+ "checkpoint": "runs/phase3a_probe_20260826_233053/best_phase3a_probe_20260826_233054.pt",
+ "epoch": 14,
+ "M": 50,
+ "n_starts": 64,
+ "split": "test",
+ "lead_24h": {
+  "ratio": 2.1197055089219305,
+  "ci_low": 2.088358991818923,
+  "ci_high": 2.147147186918429,
+  "verdict": "OVER-dispersed",
+  "n_blocks": 16
+ },
+ "lead_72h": {
+  "ratio": 2.5670434449821835,
+  "ci_low": 2.5097348592573034,
+  "ci_high": 2.615024059786779,
+  "verdict": "OVER-dispersed",
+  "n_blocks": 16
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "checkpoint": "runs/phase3a_probe_20260826_233053/best_phase3a_probe_20260826_233054.pt",
+ "epoch": 14,
+ "M": 50,
+ "n_starts": 64,
+ "split": "test",
+ "mode": "ic_eps=0.2",
+ "uniform_fraction": 0.003203778456629435,
+ "lead_24h": {
+  "ratio": 0.9734970187078682,
+  "ci_low": 0.9621856319067367,
+  "ci_high": 0.9847292129674162,
+  "verdict": "IN BAND",
+  "n_blocks": 16
+ },
+ "lead_72h": {
+  "ratio": 0.8843483176455521,
+  "ci_low": 0.861994230447788,
+  "ci_high": 0.9039230192581278,
+  "verdict": "IN BAND",
+  "n_blocks": 16
+ }
+}

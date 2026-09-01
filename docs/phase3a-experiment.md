@@ -355,6 +355,55 @@ checkpoint while the diffusion fix was being verified. If that holds up, a calib
 ensemble may not require the CRPS phase at all — CRPS would then be buying member *sharpness*
 (measured, real) rather than calibration.
 
+## 6e. CONFIRMED at full protocol — and the CRPS training was not what calibrated it
+
+Both runs use the protocol that produced the failing 2.12 / 2.57: `m = 50`, 64 start times,
+variances pooled with the root taken last, day-block bootstrap over 16 blocks
+(`ss_ic_3a.json`, `ss_ic_2c.json`).
+
+| ensemble | model | 24 h | 72 h | uniform share |
+|---|---|---|---|---|
+| FiLM, as trained | 3a | 2.120 [2.088, 2.147] | 2.567 [2.510, 2.615] | 79.2% |
+| IC perturbation, eps 0.20 | 3a | **0.973** [0.962, 0.985] | **0.884** [0.862, 0.904] | 0.3% |
+| IC perturbation, eps 0.20 | **2c, deterministic (seed 1)** | **0.951** [0.942, 0.959] | **0.860** [0.845, 0.875] | 0.4% |
+
+The sweep held at full sample size: 0.984 -> 0.973 and 0.888 -> 0.884.
+
+**The deterministic model calibrates as well as the CRPS-trained one.** 0.951 against 0.973 at
+24 h, 0.860 against 0.884 at 72 h — a gap of about two points of ratio, with the CRPS model
+marginally *higher* and both comfortably inside the band. The 2c checkpoint used is **seed 1**,
+not the seed-0 weights 3a warm-started from, so it is an independent draw rather than the same
+model measured twice.
+
+### What this costs the phase to admit
+
+Phase 3a existed to answer whether decision 0001's noise architecture produces a calibrated
+ensemble. The answer is **no** — and the follow-up says the architecture was not needed for
+calibration in the first place. A deterministic checkpoint plus perturbed initial conditions
+gets there, at inference cost, with no probabilistic training at all.
+
+What CRPS training demonstrably *did* buy is **member sharpness**: 3a's members hold 0.795 and
+1.059 at the two finest bands where 2c's deterministic forecast holds 0.646 and 0.710.
+
+**But that comparison is not yet like-for-like and should not be quoted as though it were.** It
+sets 3a's *members* against 2c's *single deterministic forecast*. The fair comparison is against
+2c's IC-perturbed members, whose spectra have not been measured. Each such member is a 2c
+forecast from a slightly different start, so its sharpness should resemble 2c's deterministic
+run — which is the reason to expect CRPS still wins here — but that is an argument, not a
+measurement. **Open item, roughly $1 of eval.**
+
+### Status of the criteria after this
+
+Criterion 3 stands as **failed**: it was pre-registered against the FiLM design, and this is a
+different ensemble construction with no pre-registration of its own. Reporting it as a pass
+would be exactly the retroactive rescue the pre-registration exists to prevent. The defensible
+claim is narrower and more interesting:
+
+> An initial-condition ensemble on this architecture is calibrated at 24 h and 72 h and carries
+> 99.6-99.7% of its variance as spatial structure, on both a CRPS-trained and a purely
+> deterministic checkpoint. The trained noise pathway is calibrated at neither and is 79% one
+> global offset.
+
 ## 7. Checklist before this is written up as a result
 
 - [x] Seed 0 complete — 16 epochs, best selection 0.20636 at epoch 15

@@ -1,0 +1,23 @@
+{
+ "checkpoint": "runs/phase2c_full_20260820_185831/best_phase2c_full_20260820_185833.pt",
+ "epoch": 7,
+ "M": 50,
+ "n_starts": 64,
+ "split": "test",
+ "mode": "ic_eps=0.2",
+ "uniform_fraction": 0.0036065559376511217,
+ "lead_24h": {
+  "ratio": 0.9507731540683089,
+  "ci_low": 0.9424738844901259,
+  "ci_high": 0.9590692745151476,
+  "verdict": "IN BAND",
+  "n_blocks": 16
+ },
+ "lead_72h": {
+  "ratio": 0.8596252407405367,
+  "ci_low": 0.845130705278302,
+  "ci_high": 0.8745719279242246,
+  "verdict": "IN BAND",
+  "n_blocks": 16
+ }
+}

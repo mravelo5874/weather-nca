@@ -49,17 +49,53 @@ def to_torch_sparse(A: sp.csr_matrix, device):
     return torch.sparse_coo_tensor(idx, val, A.shape).coalesce()
 
 
-def smooth_noise(L, n, c, k, gen, device):
-    """Spatially correlated noise: white noise relaxed by `k` explicit diffusion steps.
+def diffusion_plan(lam_max: float, l_cut: int) -> tuple[float, int]:
+    """Step size and iteration count for damping everything finer than degree `l_cut`.
 
-    Diffusion damps high graph frequencies and leaves a smooth field whose correlation length
-    grows with k -- the cheapest way to get SPPT-like structure out of the mesh the model already
-    carries. Renormalised to unit variance so `eps` alone sets the amplitude.
+    The cotangent Laplacian is negative semi-definite with eigenvalues down to -lam_max, and a
+    degree-l spherical harmonic sits at -l(l+1). One explicit step multiplies that harmonic by
+    (1 - dt*l(l+1)), so stability needs dt <= 2/lam_max; dt = 1/lam_max keeps every multiplier in
+    [0, 1], i.e. pure damping with no sign flips.
+
+    Getting this wrong is not a subtle failure. A first version used a fixed dt = 0.12 against
+    lam_max = 5302, so each step multiplied the FINEST harmonic by -636: the routine amplified
+    exactly what it was meant to remove, and 24 steps overflowed to NaN. A short smoke at k = 4
+    stayed finite and hid it.
+
+    After k steps a harmonic is damped by (1 - l(l+1)/lam_max)^k, so k ~ lam_max / l_cut(l_cut+1)
+    puts degree l_cut near 1/e.
     """
+    dt = 1.0 / lam_max
+    k = max(1, int(round(lam_max / (l_cut * (l_cut + 1)))))
+    return dt, k
+
+
+def smooth_noise(L, lam_max, n, c, l_cut, gen, device):
+    """Spatially correlated noise: white noise relaxed toward degree `l_cut`.
+
+    Renormalised to unit variance per channel so `eps` alone sets the amplitude.
+    """
+    dt, k = diffusion_plan(lam_max, l_cut)
     x = torch.randn(n, c, generator=gen, device=device)
     for _ in range(k):
-        x = x + 0.12 * torch.sparse.mm(L, x)
+        x = x + dt * torch.sparse.mm(L, x)
+    if not torch.isfinite(x).all():
+        raise FloatingPointError(
+            f"smoothing diverged (dt={dt:.3e}, k={k}, lam_max={lam_max:.1f}) -- "
+            "the diffusion step is unstable")
     return x / (x.std(dim=0, keepdim=True) + 1e-9)
+
+
+def effective_degree(L, x, aw) -> float:
+    """sqrt of the Rayleigh quotient <x, -Lx> / <x, x>, i.e. the field's typical degree l.
+
+    White noise on this mesh sits near sqrt(lam_max/2) ~ 51; a synoptic-scale field should come
+    back near `l_cut`. Reported so a silently-unsmoothed perturbation cannot pass unnoticed
+    again.
+    """
+    num = float((x * (-torch.sparse.mm(L, x))).sum().item())
+    den = float((x * x).sum().item())
+    return float(np.sqrt(max(num / max(den, 1e-12), 0.0)))
 
 
 def var_split(members, aw):
@@ -89,7 +125,8 @@ def main(argv=None) -> int:
     ap.add_argument("--ic-starts", type=int, default=24)
     ap.add_argument("--ic-members", type=int, default=20)
     ap.add_argument("--eps", default="0.02,0.05,0.10")
-    ap.add_argument("--smooth-k", type=int, default=24)
+    ap.add_argument("--l-cut", type=int, default=20,
+                    help="perturbation is smoothed to roughly this spherical-harmonic degree")
     ap.add_argument("--stages", default="uniformity,icpert")
     ap.add_argument("--out", default="noise_structure.json")
     a = ap.parse_args(argv)
@@ -160,7 +197,15 @@ def main(argv=None) -> int:
         print(f"\n{'=' * 74}")
         print("== INITIAL-CONDITION PERTURBATION, NOISE PATHWAY OFF")
         print(f"{'=' * 74}")
-        L_t = to_torch_sparse(laplacian_matrix(mesh), device)
+        Lm = laplacian_matrix(mesh)
+        L_t = to_torch_sparse(Lm, device)
+        lam_p = Path(cfg.data.cache_dir) / f"lambda_max_sub{cfg.mesh.n_sub}.npy"
+        if lam_p.exists():
+            lam_max = float(np.load(lam_p))
+        else:
+            from wnca.mesh.spectral import spectral_radius
+            lam_max = float(spectral_radius((-Lm).tocsr()))
+        dt_s, k_s = diffusion_plan(lam_max, a.l_cut)
         gen = torch.Generator(device=device)
         gen.manual_seed(0)
         eps_list = [float(x) for x in a.eps.split(",")]
@@ -170,8 +215,13 @@ def main(argv=None) -> int:
         z0 = torch.zeros(Mi, 1, cfg.model.noise_dim, device=device)
         corr = float(np.sqrt((Mi + 1) / Mi))
         out["ic_pert"] = {}
-        print(f"\n  {Mi} members | {len(ic_starts)} starts | smoothing k={a.smooth_k} | z = 0")
-        print(f"  members are carried in the BATCH dim, so each gets its own perturbed state\n")
+        probe = smooth_noise(L_t, lam_max, len(mesh["v"]), 1, a.l_cut, gen, device)
+        l_eff = effective_degree(L_t, probe, aw)
+        print(f"\n  {Mi} members | {len(ic_starts)} starts | z = 0")
+        print(f"  smoothing: lam_max {lam_max:.0f}, dt {dt_s:.3e}, {k_s} steps -> target degree "
+              f"{a.l_cut}, measured {l_eff:.1f} "
+              f"(unsmoothed noise would be {np.sqrt(lam_max / 2):.0f})")
+        print("  members are carried in the BATCH dim, so each gets its own perturbed state\n")
         head = f"  {'eps':>6} " + " ".join(f"{'ss@' + str(L) + 'h':>10}" for L in leads)
         print(head + f" {'uniform@' + str(leads[0]) + 'h':>16}")
         print("  " + "-" * (len(head) + 12))
@@ -184,7 +234,8 @@ def main(argv=None) -> int:
                     cur1 = torch.as_tensor(arr[s0:s0 + 1], device=device).float()
                     prev1 = torch.as_tensor(arr[s0 - 1:s0], device=device).float()
                     pert = torch.stack([
-                        smooth_noise(L_t, cur1.shape[1], cur1.shape[2], a.smooth_k, gen, device)
+                        smooth_noise(L_t, lam_max, cur1.shape[1], cur1.shape[2],
+                                     a.l_cut, gen, device)
                         for _ in range(Mi)])
                     cur = cur1 + eps * pert
                     prev = prev1.expand(Mi, -1, -1).contiguous()

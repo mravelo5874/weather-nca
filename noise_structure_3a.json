@@ -1,0 +1,42 @@
+{
+ "epoch": 14,
+ "leads": [
+  24,
+  72
+ ],
+ "checkpoint": "runs/phase3a_probe_20260826_233053/best_phase3a_probe_20260826_233054.pt",
+ "uniformity": {
+  "24h": {
+   "uniform_fraction": 0.7921167250571511,
+   "global_sd": 0.48806365685935393,
+   "spatial_sd": 0.2498760375576915
+  },
+  "72h": {
+   "uniform_fraction": 0.7626023609185213,
+   "global_sd": 1.1495751292445313,
+   "spatial_sd": 0.6396576216810673
+  }
+ },
+ "ic_pert": {
+  "eps_0.05": {
+   "ss_24h": NaN,
+   "ss_72h": NaN,
+   "uniform_fraction": NaN
+  },
+  "eps_0.1": {
+   "ss_24h": NaN,
+   "ss_72h": NaN,
+   "uniform_fraction": NaN
+  },
+  "eps_0.2": {
+   "ss_24h": NaN,
+   "ss_72h": NaN,
+   "uniform_fraction": NaN
+  },
+  "eps_0.4": {
+   "ss_24h": NaN,
+   "ss_72h": NaN,
+   "uniform_fraction": NaN
+  }
+ }
+}

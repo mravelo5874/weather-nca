@@ -286,6 +286,75 @@ does not, the fault is in how spread grows with lead, not in its size, and a ret
 `noise_std` would not fix it either. Report any such factor as a **calibration factor, not a
 pass** — tuning until the number lands in the band is fitting to the criterion.
 
+## 6c. WHY it fails — the ensemble is one global offset
+
+Prompted by an observation on the globe visualisation: member 1 sat at one extreme of every
+field while member 2 tracked ERA5. Measured with `scripts/diag_noise_structure.py`
+(`noise_structure_3a.json`), 50 members, splitting each member's deviation from the ensemble
+mean into a spatially-uniform offset plus a spatial pattern:
+
+| lead | uniform share of ensemble variance | global sd | spatial sd |
+|---|---|---|---|
+| 24 h | **79.2%** | 0.4881 | 0.2499 |
+| 72 h | **76.3%** | 1.1496 | 0.6397 |
+
+**About four-fifths of the ensemble's variance is a single number added everywhere.** These are
+not 50 alternative weather scenarios; they are one forecast run at 50 settings of a global
+warmer/colder dial.
+
+This is what decision 0001 must produce. One `z` per member, constant across all 10,242 cells
+and all sub-steps, injected through FiLM, can only modulate the update rule identically
+everywhere — so it biases the tendency uniformly, and 800 sub-steps integrate that into a drift.
+The design prevented collapse by the crudest available means.
+
+It reframes three earlier numbers rather than adding a fourth:
+
+- The over-dispersion in §6b is now **explained**: uniform offsets inflate spread while
+  contributing nothing that could reduce error.
+- **The `noise_std` remedy proposed in §6b is dead.** Shrinking the offset would land
+  spread–skill in band while leaving it 79% structureless — passing the criterion for the wrong
+  reason, which is worse than failing it.
+- The members' **1.250 at the coarsest band** (§ the closeout comparison), the highest of any
+  band, is that DC offset showing up as excess planetary-scale energy — not resolved weather.
+
+## 6d. The fix: move the noise to the initial condition
+
+Tested on the *existing* checkpoint, inference only, no retraining (`ic_pert_3a.json`). Each
+member starts from the analysis plus a spatially-correlated perturbation — white noise relaxed by
+graph diffusion to spherical-harmonic degree ~14 — with the FiLM pathway held at **z = 0**, so
+the model's own error growth does the diversifying. 20 members, 16 starts.
+
+| eps | spread–skill @24 h | spread–skill @72 h | uniform share |
+|---|---|---|---|
+| 0.05 | 0.268 | 0.293 | 0.3% |
+| 0.10 | 0.523 | 0.530 | 0.3% |
+| **0.20** | **0.984** | **0.888** | **0.3%** |
+| 0.40 | 1.546 | 1.235 | 0.4% |
+
+Two results, and they should be quoted with different confidence.
+
+**The structural one is robust and untuned.** The uniform share is 0.3–0.4% at *every* amplitude
+— it is a property of where the noise enters, not of how much. Against the FiLM pathway's 79%,
+that is the finding: **99.7% spatial structure versus 21%.**
+
+**The calibration one is a swept curve, not a pass.** At `eps = 0.20` both leads land inside
+0.8–1.25, and the ratio is nearly flat across lead (0.984 → 0.888) where the FiLM ensemble grew
+2.12 → 2.57 — spread and error growing together is what a well-posed ensemble does. But that
+amplitude was *selected from a sweep against the criterion*, on 20 members and 16 starts with no
+bootstrap CIs, on the contaminated split. **It must be confirmed independently** — different
+starts, 50 members, day-block CIs — before it is quoted as a calibrated result.
+
+### What this changes for the project
+
+The noise does not need a bigger budget or a different magnitude; **it needs to enter somewhere
+else.** That is available today at inference cost, without touching the architecture, and it does
+not violate the CLAUDE.md constraint on re-drawing `z` — `z` is simply unused.
+
+A follow-up worth its ~$2: the same technique bracketed the band on the **2c deterministic**
+checkpoint while the diffusion fix was being verified. If that holds up, a calibrated structured
+ensemble may not require the CRPS phase at all — CRPS would then be buying member *sharpness*
+(measured, real) rather than calibration.
+
 ## 7. Checklist before this is written up as a result
 
 - [x] Seed 0 complete — 16 epochs, best selection 0.20636 at epoch 15

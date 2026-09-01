@@ -10,6 +10,7 @@ Pooling follows the project convention (CLAUDE.md): variances and squared errors
 across start times and the square root is taken LAST. Averaging per-start ratios would be biased.
 """
 import argparse, json, sys
+from pathlib import Path
 sys.path.insert(0, "src")
 import numpy as np
 import torch
@@ -18,6 +19,10 @@ from wnca.config import load_config
 from wnca.losses.terms import area_weights
 from wnca.train.checkpoint import load_checkpoint
 from wnca.train.phases import setup
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from diag_noise_structure import (  # noqa: E402
+    diffusion_plan, effective_degree, smooth_noise, to_torch_sparse, var_split)
+from wnca.mesh.operators import laplacian_matrix  # noqa: E402
 
 
 def main():
@@ -29,6 +34,10 @@ def main():
     ap.add_argument("--members", type=int, default=None)
     ap.add_argument("--leads", default="24,72")
     ap.add_argument("--boot", type=int, default=2000)
+    ap.add_argument("--ic-eps", type=float, default=0.0,
+                    help="0 uses the model's own FiLM ensemble; >0 perturbs the INITIAL "
+                         "CONDITION with a spatially correlated field and holds z = 0")
+    ap.add_argument("--l-cut", type=int, default=20)
     ap.add_argument("--out", default="spread_skill.json")
     a = ap.parse_args()
 
@@ -53,6 +62,29 @@ def main():
         solar = SolarForcing(cache.times(a.split), mesh, device)
     static = torch.from_numpy(cache.static).float().to(device).unsqueeze(0)
 
+    # IC mode. Members ride in the BATCH dimension so each gets its own perturbed analysis, and
+    # z is pinned to zero so nothing enters through FiLM -- the model's own error growth is the
+    # only thing separating members.
+    ic = a.ic_eps > 0
+    if ic:
+        Lm = laplacian_matrix(mesh)
+        L_t = to_torch_sparse(Lm, device)
+        lam_p = Path(str(cfg.data.cache_dir)) / f"lambda_max_sub{cfg.mesh.n_sub}.npy"
+        if lam_p.exists():
+            lam_max = float(np.load(lam_p))
+        else:
+            from wnca.mesh.spectral import spectral_radius
+            lam_max = float(spectral_radius((-Lm).tocsr()))
+        dt_s, k_s = diffusion_plan(lam_max, a.l_cut)
+        gen = torch.Generator(device=device)
+        gen.manual_seed(0)
+        static_M = static.expand(M, -1, -1).contiguous()
+        z0 = torch.zeros(M, 1, cfg.model.noise_dim, device=device)
+        probe = smooth_noise(L_t, lam_max, len(mesh["v"]), 1, a.l_cut, gen, device)
+        print(f"IC perturbation: eps {a.ic_eps} | degree target {a.l_cut}, measured "
+              f"{effective_degree(L_t, probe, aw):.1f} | dt {dt_s:.2e}, {k_s} steps | z = 0")
+    uni = []
+
     # Per start, per lead: area-weighted mean ensemble VARIANCE and mean SQUARED ERROR of the
     # ensemble mean, both averaged over channels. Kept unrooted so pooling can root last.
     var_acc = {L: [] for L in leads}
@@ -62,9 +94,23 @@ def main():
         for n, s0 in enumerate(starts):
             prev = torch.as_tensor(arr[s0 - 1:s0], device=device).float()
             cur = torch.as_tensor(arr[s0:s0 + 1], device=device).float()
-            fw = solar.window(torch.tensor([int(s0)], device=device), nw_max) if solar else None
-            pred = model.rollout_ensemble(model.seed(cur), static, nw_max, prev_phys=prev,
-                                          n_members=M, forcing=fw)
+            if ic:
+                pert = torch.stack([smooth_noise(L_t, lam_max, cur.shape[1], cur.shape[2],
+                                                 a.l_cut, gen, device) for _ in range(M)])
+                cur_m = cur + a.ic_eps * pert
+                prev_m = prev.expand(M, -1, -1).contiguous()
+                fw = (solar.window(torch.full((M,), int(s0), device=device), nw_max)
+                      if solar else None)
+                pred = model.rollout_ensemble(model.seed(cur_m), static_M, nw_max,
+                                              prev_phys=prev_m, n_members=1, z=z0,
+                                              forcing=fw).transpose(0, 1)
+            else:
+                fw = (solar.window(torch.tensor([int(s0)], device=device), nw_max)
+                      if solar else None)
+                pred = model.rollout_ensemble(model.seed(cur), static, nw_max, prev_phys=prev,
+                                              n_members=M, forcing=fw)
+            if not torch.isfinite(pred).all():
+                raise FloatingPointError(f"non-finite rollout at start {s0}")
             for L in leads:
                 k = L // 6 - 1
                 mem = pred[:, :, k][..., :cfg.c_phys]          # [1, M, N, C]
@@ -75,13 +121,17 @@ def main():
                 w = aw.view(1, -1, 1)
                 var_acc[L].append(((var * w).sum(dim=(0, 1)) / w.sum()).cpu().numpy())
                 sq_acc[L].append(((sq * w).sum(dim=(0, 1)) / w.sum()).cpu().numpy())
+                if L == leads[0]:
+                    uni.append(var_split(mem[0], aw)[0])
             if (n + 1) % 8 == 0:
                 print(f"  {n + 1}/{len(starts)} starts")
 
     corr = np.sqrt((M + 1) / M)   # finite-ensemble correction, as in losses/crps.py
     rng = np.random.default_rng(0)
     out = {"checkpoint": a.checkpoint, "epoch": blob.get("epoch"), "M": M,
-           "n_starts": int(len(starts)), "split": a.split}
+           "n_starts": int(len(starts)), "split": a.split,
+           "mode": f"ic_eps={a.ic_eps}" if ic else "film",
+           "uniform_fraction": float(np.mean(uni)) if uni else None}
 
     def ratio(v, s, idx):
         """Pool variance and squared error over the selected starts, root LAST, then ratio."""
@@ -107,6 +157,9 @@ def main():
         out[f"lead_{L}h"] = {"ratio": point, "ci_low": float(lo), "ci_high": float(hi),
                             "verdict": verdict, "n_blocks": len(blocks)}
 
+    if uni:
+        print(f"\n  spatially-uniform share of ensemble variance at {leads[0]} h: "
+              f"{100 * float(np.mean(uni)):.1f}%    (the FiLM ensemble measured 79.2%)")
     print("\n  criterion 3 band is 0.8-1.25 at BOTH 24 h and 72 h")
     json.dump(out, open(a.out, "w"), indent=1)
     print(f"  written to {a.out}")

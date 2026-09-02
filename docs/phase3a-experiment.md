@@ -404,6 +404,50 @@ claim is narrower and more interesting:
 > deterministic checkpoint. The trained noise pathway is calibrated at neither and is 79% one
 > global offset.
 
+## 6f. RETRACTION — CRPS did not buy measurable member sharpness
+
+Section 6e flagged the sharpness claim as resting on a comparison that was not like-for-like and
+booked a ~$1 measurement to settle it. It is settled, and **the claim does not survive**
+(`sharp_*.json`, geopotential 500 at +72 h, 20 members, 16 starts).
+
+| ensemble | b0 | b1 | b2 | b3 | b4 | finer half |
+|---|---|---|---|---|---|---|
+| 3a, FiLM members | 1.251 | 1.046 | 0.903 | 0.789 | 1.059 | 0.917 |
+| 3a, IC members | 1.051 | 1.101 | 0.952 | 0.694 | 0.780 | **0.808** |
+| 2c, IC members | 1.076 | 1.090 | 0.952 | 0.710 | 0.874 | **0.845** |
+| 2c, deterministic | 1.086 | 1.076 | 0.929 | 0.707 | 0.868 | 0.835 |
+
+Built the same way — the middle two rows, identical construction, differing only in whether the
+model saw a probabilistic objective — **the CRPS-trained members are not sharper.** They are
+slightly blurrier.
+
+**The right conclusion is "no detectable advantage", not "the deterministic model is sharper."**
+The same quantity on 2c deterministic measured 0.726 in the closeout (24 starts) and 0.835 here
+(16 starts) — a swing of 0.11 on one model from start-date sampling alone. The 0.845 vs 0.808 gap
+is 0.04, comfortably inside that. These band ratios have no error bars and should not be read to
+three digits.
+
+**The FiLM row's 0.917 is not a win either.** That is the ensemble failing calibration at 2.12,
+whose members carry a 79% global offset, and whose finest band runs *hot* at 1.059 while its
+mid-bands sag. The closeout doc already warned about exactly this shape: a hot finest band beside
+damped mid-scales is small-scale noise on a smoothed spectrum, not sharpness. A globally
+modulated update rule is a plausible source of precisely that noise.
+
+### What phase 3a bought, stated honestly
+
+Nothing that the free fix did not, on any measurement taken:
+
+| | CRPS-trained (3a) | deterministic (2c) |
+|---|---|---|
+| calibration with IC ensemble | 0.973 | 0.951 |
+| member sharpness, like-for-like | 0.808 | 0.845 |
+| error growth per step | x1.142 | **x1.079** |
+| deterministic z500 at 24 h | 184 | **174** |
+
+The probabilistic phase cost a day of compute, ~$19, a stability regression on all 28 channels
+and ~6% of deterministic accuracy. **It has not been shown to have bought anything measurable.**
+That is the finding, and it is worth more than the pass it was hoping for.
+
 ## 7. Checklist before this is written up as a result
 
 - [x] Seed 0 complete — 16 epochs, best selection 0.20636 at epoch 15
